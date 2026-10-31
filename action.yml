@@ -1,0 +1,106 @@
+name: 'mcp-catalog-snap'
+description: >-
+  Re-capture an MCP server's tools/prompts/resource-template catalog and fail
+  the job if it drifted from the committed .mcp-catalog snapshot (catalog drift
+  silently invalidates prompt-cache prefixes and changes agent behavior).
+author: 'Joshua Bryan'
+branding:
+  icon: 'camera'
+  color: 'orange'
+
+inputs:
+  servers-config:
+    description: 'Path to the .mcp-catalog.json listing servers to check.'
+    required: false
+    default: '.mcp-catalog.json'
+  working-directory:
+    description: 'Directory to run in (where the config and snapshots live).'
+    required: false
+    default: '.'
+  ignore-descriptions:
+    description: 'Do not treat description-only changes as drift (true/false).'
+    required: false
+    default: 'false'
+  allow-additions:
+    description: 'Do not treat added tools/prompts/templates as drift (true/false).'
+    required: false
+    default: 'false'
+  server:
+    description: 'Only check this configured server name.'
+    required: false
+    default: ''
+  timeout-ms:
+    description: 'Per-request timeout in milliseconds.'
+    required: false
+    default: '30000'
+  node-version:
+    description: 'Node.js version to set up for the CLI (needs >= 20).'
+    required: false
+    default: '22'
+
+outputs:
+  drift:
+    description: '"true" when any server drifted, else "false".'
+    value: ${{ steps.check.outputs.drift }}
+  report:
+    description: 'Path to the JSON report written by the check.'
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Build the pinned copy of the CLI that ships with this action ref, so the
+    # check uses exactly the version the workflow pinned (no npm lookup).
+    - name: Build mcp-catalog-snap
+      shell: bash
+      run: |
+        cd "$GITHUB_ACTION_PATH"
+        npm ci --ignore-scripts --no-audit --no-fund
+        npm run build
+
+    - name: Check MCP catalog snapshots
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_CONFIG: ${{ inputs.servers-config }}
+        INPUT_IGNORE_DESCRIPTIONS: ${{ inputs.ignore-descriptions }}
+        INPUT_ALLOW_ADDITIONS: ${{ inputs.allow-additions }}
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_TIMEOUT: ${{ inputs.timeout-ms }}
+      run: |
+        set +e
+        args=(check --config "$INPUT_CONFIG" --timeout "$INPUT_TIMEOUT")
+        [ "$INPUT_IGNORE_DESCRIPTIONS" = "true" ] && args+=(--ignore-descriptions)
+        [ "$INPUT_ALLOW_ADDITIONS" = "true" ] && args+=(--allow-additions)
+        [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
+
+        report="$RUNNER_TEMP/mcp-catalog-report.json"
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" | tee mcp-catalog-check.txt
+        code=${PIPESTATUS[0]}
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+
+        if [ "$code" -eq 1 ]; then
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "## MCP catalog drift detected"
+            echo
+            echo '```'
+            cat mcp-catalog-check.txt
+            echo '```'
+            echo
+            echo 'Re-snapshot with `npx mcp-catalog-snap snapshot` and commit `.mcp-catalog/` if the change is intended.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)"
+        else
+          echo "drift=false" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            echo "## MCP catalog: no drift" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+        rm -f mcp-catalog-check.txt
+        exit "$code"

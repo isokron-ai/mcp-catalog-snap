@@ -1,0 +1,411 @@
+{
+  "capturedAt": "2026-10-31T23:01:48.036Z",
+  "capturedWith": "mcp-catalog-snap/0.1.0",
+  "catalog": {
+    "prompts": [],
+    "resourceTemplates": [
+      {
+        "description": "Current revision of a stored document as Markdown.",
+        "mimeType": "text/markdown",
+        "name": "document",
+        "title": "Documents",
+        "uriTemplate": "kronicle://docs/{slug}"
+      }
+    ],
+    "tools": [
+      {
+        "annotations": {
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "The reconciliation surface. Pass the facts you are about to act on as claims {symbol, value}: symbol is a block id (value = its content or content_hash), a document slug (value = revision number, markdown hash, or markdown), or \"head\" (value = chain seq or hash). Each claim is graded current | stale (a newer version exists) | contradicted (the live value differs) | retracted (tombstoned) | unknown, with the current truth and a reconcile line. Use it after a drift banner or retraction list, before writing.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "claims": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "symbol": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200000,
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "symbol",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "claims"
+          ],
+          "type": "object"
+        },
+        "name": "audit_assumptions",
+        "title": "Grade beliefs against the chain"
+      },
+      {
+        "annotations": {
+          "destructiveHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        },
+        "description": "Compute a Merkle root over event hashes in [from_seq, to_seq] (default: 1..head), sign it with the server key, and store it. verify_chain checks checkpoints; export them off-box if you want a record that survives local tampering.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "from_seq": {
+              "default": 1,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "to_seq": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "checkpoint_chain",
+        "title": "Sign a Merkle checkpoint"
+      },
+      {
+        "annotations": {
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "Orient call — INSTRUCTS the agent. Call at session start AND before any write-class work. Present your previous `cursor` (or `cursor_compact`) as `since_cursor` to get a true delta: cold start receives the digest plus everything; warm wake receives only what changed since your cursor. Honor the drift banner: when it is surfaced, your memory of this store is stale and the delta is the catch-up. When retractions are reported, reconcile BEFORE acting — affirm the current truth (cite seq), name the old claim once, stop using it as a premise. An invalid or missing cursor never fails: position is recovered from the flight recorder or genesis, and the response says which. Focuses: orientation (default: digest + delta + retractions) | recent_changes (delta + retractions) | retractions (only retractions) | pulse (head + drift banner, ~50 tokens; call this before every write and only pay for a full delta when the banner surfaces). response_format markdown (default) or json. Always carry the returned cursor forward.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "description": "Stable identity of the calling agent. Defaults to the server --actor setting. Cursors are bound to it.",
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "budget_tokens": {
+              "default": 3000,
+              "description": "Approximate token budget for the delta.",
+              "maximum": 64000,
+              "minimum": 200,
+              "type": "integer"
+            },
+            "focus": {
+              "default": "orientation",
+              "enum": [
+                "orientation",
+                "recent_changes",
+                "retractions",
+                "pulse"
+              ],
+              "type": "string"
+            },
+            "response_format": {
+              "default": "markdown",
+              "enum": [
+                "markdown",
+                "json"
+              ],
+              "type": "string"
+            },
+            "since_cursor": {
+              "description": "Cursor from your previous call (sxt1. or sxt1c. form).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "get_system_state",
+        "title": "Orient against the chain"
+      },
+      {
+        "annotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        },
+        "description": "Store a Markdown document under a slug. A new slug creates revision 1; an existing slug creates the next revision: unchanged blocks keep their ids, changed blocks are superseded (old → new), removed blocks are tombstoned. Emits document.put + block.* events and returns every block id with its BLAKE3 content hash and the new chain head. Pass your cursor so the response can tell you if you are writing on stale assumptions (advisory only).",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "description": "Stable identity of the calling agent. Defaults to the server --actor setting. Cursors are bound to it.",
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "cursor": {
+              "description": "Your most recent cursor from get_system_state (full or compact). Used only to compute the stale-write advisory.",
+              "type": "string"
+            },
+            "idempotency_key": {
+              "description": "Replay-safe key; repeating it returns the first result.",
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "markdown": {
+              "maxLength": 2000000,
+              "type": "string"
+            },
+            "slug": {
+              "description": "lowercase letters, digits, . _ -",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "slug",
+            "title",
+            "markdown"
+          ],
+          "type": "object"
+        },
+        "name": "put_document",
+        "title": "Create or replace a document"
+      },
+      {
+        "annotations": {
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "Full-text search (bm25) over live document blocks. Each hit carries a signed receipt v2 binding (block_id, content_hash, doc_slug, revision) to the chain head at issue time. Keep the receipt with any claim you derive from the block; pass it to verify() later to learn whether the block is still current (VERIFIED), was replaced (SUPERSEDED, with the current head), was retired (TOMBSTONED), or cannot be trusted (UNVERIFIED). Superseded blocks are never returned; tombstoned only with include_tombstoned. Set include_receipts:false for a lean result.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "include_receipts": {
+              "default": true,
+              "type": "boolean"
+            },
+            "include_tombstoned": {
+              "default": false,
+              "type": "boolean"
+            },
+            "query": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "top_k": {
+              "default": 12,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        },
+        "name": "recall",
+        "title": "Search blocks with signed receipts"
+      },
+      {
+        "annotations": {
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        },
+        "description": "Replace a live block's content with a new block (old → new supersession, with a reason). Receipts issued for the old block will verify as SUPERSEDED pointing at the new one. The document gets a new revision. Refused if the block is already superseded or tombstoned (operate on the current head instead).",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "description": "Stable identity of the calling agent. Defaults to the server --actor setting. Cursors are bound to it.",
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "block_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "cursor": {
+              "description": "Your most recent cursor from get_system_state (full or compact). Used only to compute the stale-write advisory.",
+              "type": "string"
+            },
+            "new_content": {
+              "maxLength": 200000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "block_id",
+            "new_content",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "name": "supersede_block",
+        "title": "Replace one block"
+      },
+      {
+        "annotations": {
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false,
+          "readOnlyHint": false
+        },
+        "description": "Mark a live block as no longer valid, with a reason, and no successor. It leaves recall() results (unless include_tombstoned) and receipts for it verify as TOMBSTONED. The document gets a new revision.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "actor_id": {
+              "description": "Stable identity of the calling agent. Defaults to the server --actor setting. Cursors are bound to it.",
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "block_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "cursor": {
+              "description": "Your most recent cursor from get_system_state (full or compact). Used only to compute the stale-write advisory.",
+              "type": "string"
+            },
+            "reason": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "block_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        "name": "tombstone_block",
+        "title": "Retire one block"
+      },
+      {
+        "annotations": {
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "Re-derive a receipt against the live store. Fail-closed. Checks the Ed25519 signature (local key registry), block existence, content hash, that the receipt's chain position is still on the chain, and walks supersession to the current head. Returns VERIFIED | SUPERSEDED (with current_block_id/current_content_hash) | TOMBSTONED | UNVERIFIED with a closed-enum reason. Malformed input yields UNVERIFIED/malformed_receipt, never a tool error.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "additionalProperties": {},
+              "description": "The full receipt object from recall(), including signature.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "receipt"
+          ],
+          "type": "object"
+        },
+        "name": "verify",
+        "title": "Verify a retrieval receipt"
+      },
+      {
+        "annotations": {
+          "idempotentHint": true,
+          "openWorldHint": false,
+          "readOnlyHint": true
+        },
+        "description": "Recompute every event hash and link in [from_seq, to_seq] (default: whole chain), report the first mismatch if any, and validate every stored signed checkpoint in range. ok:false means the database was altered outside the append path or is corrupt; the first_mismatch seq tells you where.",
+        "execution": {
+          "taskSupport": "forbidden"
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "properties": {
+            "from_seq": {
+              "default": 1,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "to_seq": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "verify_chain",
+        "title": "Verify chain integrity"
+      }
+    ]
+  },
+  "format": "mcp-catalog-snap/1",
+  "protocolVersion": "2025-11-25",
+  "server": {
+    "name": "kronicle-lite",
+    "version": "0.2.0"
+  },
+  "sha256": "38506578bae09476f1d2b2a6722b35a9cc5b3925013d765b1ed4cac21ecab698"
+}

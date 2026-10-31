@@ -1,0 +1,13 @@
+{
+  "snapshotDir": ".mcp-catalog",
+  "servers": [
+    {
+      "name": "kronicle-lite",
+      "command": ["npx", "-y", "kronicle-lite@0.2.0", "serve"]
+    },
+    {
+      "name": "sea-lite",
+      "command": ["npx", "-y", "sea-lite@0.1.1", "serve"]
+    }
+  ]
+}

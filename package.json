@@ -1,0 +1,77 @@
+{
+  "name": "mcp-catalog-snap",
+  "version": "0.1.0",
+  "description": "Snapshot an MCP server's tools/prompts/resource-template catalog as canonical JSON and fail CI on byte drift — catalog drift silently invalidates prompt-cache prefixes and changes agent behavior.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "mcp-catalog-snap": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "action.yml",
+    "examples",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "lint": "eslint src test",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "snapshot:examples": "node dist/cli.js snapshot --config examples/.mcp-catalog.json"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tools",
+    "snapshot",
+    "drift",
+    "prompt-cache",
+    "canonical-json",
+    "jcs",
+    "rfc8785",
+    "ci",
+    "github-action"
+  ],
+  "author": "Joshua Bryan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rafe-walker/mcp-catalog-snap.git"
+  },
+  "homepage": "https://github.com/rafe-walker/mcp-catalog-snap#readme",
+  "bugs": {
+    "url": "https://github.com/rafe-walker/mcp-catalog-snap/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "canonicalize": "^2.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.19.0",
+    "eslint": "^9.39.0",
+    "kronicle-lite": "0.2.0",
+    "sea-lite": "0.1.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4",
+    "zod": "^3.25.76"
+  }
+}

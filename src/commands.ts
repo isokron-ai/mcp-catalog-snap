@@ -1,0 +1,314 @@
+/**
+ * Command implementations. Pure-ish: they take options + an IO sink and
+ * return an exit code, so tests can drive them without spawning the CLI.
+ *
+ * Exit codes:
+ *   0  no drift / success
+ *   1  drift detected (check, diff)
+ *   2  usage, config, connection or I/O error
+ */
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+import { fingerprint } from './canonical.js';
+import { capture, describeTarget, type CaptureOptions, type Target } from './capture.js';
+import { DEFAULT_CONFIG_FILE, DEFAULT_SNAPSHOT_DIR, loadConfig, type ServerSpec } from './config.js';
+import { diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
+import { renderDiff, renderSnapshotHeader, type CheckReport, type ServerResult } from './render.js';
+import {
+  buildSnapshot,
+  parseSnapshot,
+  safeFileName,
+  serializeSnapshot,
+  snapshotSelfConsistent,
+  type Snapshot,
+} from './snapshot.js';
+import { VERSION } from './version.js';
+
+export const EXIT_OK = 0;
+export const EXIT_DRIFT = 1;
+export const EXIT_ERROR = 2;
+
+export interface IO {
+  out: (line: string) => void;
+  err: (line: string) => void;
+}
+
+export interface TargetSelection {
+  /** Ad-hoc target from --url / `-- cmd`. */
+  target?: Target;
+  /** Snapshot name override for an ad-hoc target. */
+  name?: string;
+  /** Config file path (default .mcp-catalog.json, only if it exists). */
+  config?: string;
+  /** Only this configured server. */
+  server?: string;
+  /** Snapshot directory override. */
+  dir?: string;
+  cwd?: string;
+}
+
+export interface CommonOptions extends TargetSelection {
+  timeoutMs?: number;
+  json?: boolean;
+  quiet?: boolean;
+  /** Where the stdio child's stderr goes (default: inherit; --json implies ignore). */
+  childStderr?: 'inherit' | 'ignore';
+}
+
+interface Resolved {
+  specs: ServerSpec[];
+  snapshotDir: string;
+  /** Ad-hoc targets have no fixed name until the server tells us. */
+  adHoc: boolean;
+}
+
+function resolveTargets(sel: TargetSelection): Resolved {
+  const cwd = sel.cwd ?? process.cwd();
+  if (sel.target) {
+    if (sel.server) throw new Error('--server selects a configured server; it cannot be combined with an ad-hoc target');
+    return {
+      specs: [{ name: sel.name ?? '', target: sel.target }],
+      snapshotDir: resolve(cwd, sel.dir ?? DEFAULT_SNAPSHOT_DIR),
+      adHoc: true,
+    };
+  }
+  const configPath = resolve(cwd, sel.config ?? DEFAULT_CONFIG_FILE);
+  if (!existsSync(configPath)) {
+    throw new Error(
+      sel.config
+        ? `config not found: ${configPath}`
+        : `no ${DEFAULT_CONFIG_FILE} in ${cwd} and no target given — pass --url URL, \`-- command args\`, or --config FILE`,
+    );
+  }
+  const cfg = loadConfig(configPath);
+  let specs = cfg.servers;
+  if (sel.server !== undefined) {
+    specs = specs.filter((s) => s.name === sel.server);
+    if (specs.length === 0) {
+      throw new Error(`server "${sel.server}" is not in ${configPath} (known: ${cfg.servers.map((s) => s.name).join(', ') || 'none'})`);
+    }
+  }
+  if (specs.length === 0) throw new Error(`${configPath} lists no servers`);
+  return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false };
+}
+
+function snapshotPath(dir: string, name: string): string {
+  return join(dir, `${safeFileName(name)}.json`);
+}
+
+function readSnapshotFile(path: string): Snapshot {
+  const text = readFileSync(path, 'utf8');
+  return parseSnapshot(text, path);
+}
+
+function captureOpts(o: CommonOptions): CaptureOptions {
+  const c: CaptureOptions = {};
+  if (o.timeoutMs !== undefined) c.timeoutMs = o.timeoutMs;
+  // When emitting JSON, keep the child's stderr out of the way.
+  c.stderr = o.childStderr ?? (o.json ? 'ignore' : 'inherit');
+  return c;
+}
+
+/* ------------------------------------------------------------------ */
+/* snapshot                                                           */
+/* ------------------------------------------------------------------ */
+
+export interface SnapshotOptions extends CommonOptions {
+  /** Do not write; print the snapshot JSON to stdout. */
+  noWrite?: boolean;
+}
+
+export async function cmdSnapshot(opts: SnapshotOptions, io: IO): Promise<number> {
+  let resolved: Resolved;
+  try {
+    resolved = resolveTargets(opts);
+  } catch (err) {
+    io.err(`error: ${(err as Error).message}`);
+    return EXIT_ERROR;
+  }
+  let failures = 0;
+  for (const spec of resolved.specs) {
+    try {
+      const raw = await capture(spec.target, captureOpts(opts));
+      const snap = buildSnapshot(raw);
+      const name = spec.name || raw.server.name;
+      const text = serializeSnapshot(snap);
+      if (opts.noWrite) {
+        io.out(text.trimEnd());
+        continue;
+      }
+      mkdirSync(resolved.snapshotDir, { recursive: true });
+      const path = snapshotPath(resolved.snapshotDir, name);
+      writeFileSync(path, text, 'utf8');
+      if (!opts.quiet) {
+        io.out(`wrote ${path}`);
+        io.out(renderSnapshotHeader(snap));
+      }
+    } catch (err) {
+      failures++;
+      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${(err as Error).message}`);
+    }
+  }
+  return failures > 0 ? EXIT_ERROR : EXIT_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* check                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface CheckOptions extends CommonOptions, DriftPolicy {
+  /** Rewrite the snapshot when drift is found (still exits 1). */
+  update?: boolean;
+  /** Also write the JSON report to this file (human output stays on stdout). */
+  reportFile?: string;
+}
+
+export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
+  let resolved: Resolved;
+  try {
+    resolved = resolveTargets(opts);
+  } catch (err) {
+    io.err(`error: ${(err as Error).message}`);
+    return EXIT_ERROR;
+  }
+  const policy: DriftPolicy = {
+    ignoreDescriptions: opts.ignoreDescriptions ?? false,
+    allowAdditions: opts.allowAdditions ?? false,
+  };
+  const results: ServerResult[] = [];
+
+  for (const spec of resolved.specs) {
+    const label = spec.name || describeTarget(spec.target);
+    try {
+      const raw = await capture(spec.target, captureOpts(opts));
+      const live = buildSnapshot(raw);
+      const name = spec.name || raw.server.name;
+      const path = snapshotPath(resolved.snapshotDir, name);
+      if (!existsSync(path)) {
+        throw new Error(`no snapshot at ${path} — run \`mcp-catalog-snap snapshot\` first`);
+      }
+      const stored = readSnapshotFile(path);
+      if (!snapshotSelfConsistent(stored)) {
+        io.err(`warning: ${path}: stored sha256 does not match its catalog body (hand-edited?); comparing against the body`);
+      }
+      const diff = diffCatalogs(stored.catalog, live.catalog);
+      const verdict = evaluate(diff, policy);
+      results.push({
+        server: name,
+        ok: true,
+        drift: verdict.drift,
+        snapshotPath: path,
+        fingerprint: { snapshot: diff.fingerprint.before, live: diff.fingerprint.after },
+        serverVersion: { snapshot: stored.server.version, live: live.server.version },
+        diff,
+        verdict,
+      });
+      if (!opts.json) {
+        io.out(`== ${name} (${path})`);
+        if (stored.server.version !== live.server.version) {
+          io.out(`server version: ${stored.server.version} -> ${live.server.version}`);
+        }
+        io.out(renderDiff(diff, verdict));
+        io.out('');
+      }
+      if (verdict.drift && opts.update) {
+        writeFileSync(path, serializeSnapshot(live), 'utf8');
+        if (!opts.json) io.out(`updated ${path}`);
+      }
+    } catch (err) {
+      results.push({ server: label, ok: false, drift: false, error: (err as Error).message });
+      if (!opts.json) io.err(`error: ${label}: ${(err as Error).message}`);
+    }
+  }
+
+  const anyError = results.some((r) => !r.ok);
+  const anyDrift = results.some((r) => r.drift);
+  const report: CheckReport = {
+    tool: `mcp-catalog-snap/${VERSION}`,
+    ok: !anyError && !anyDrift,
+    policy: { ignoreDescriptions: policy.ignoreDescriptions ?? false, allowAdditions: policy.allowAdditions ?? false },
+    servers: results,
+  };
+  if (opts.reportFile !== undefined) {
+    try {
+      writeFileSync(opts.reportFile, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    } catch (err) {
+      io.err(`error: cannot write report ${opts.reportFile}: ${(err as Error).message}`);
+      return EXIT_ERROR;
+    }
+  }
+  if (opts.json) {
+    io.out(JSON.stringify(report, null, 2));
+  } else if (!anyError) {
+    const n = results.length;
+    io.out(anyDrift ? `${results.filter((r) => r.drift).length}/${n} server(s) drifted` : `${n}/${n} server(s) match their snapshot`);
+  }
+  if (anyError) return EXIT_ERROR;
+  return anyDrift ? EXIT_DRIFT : EXIT_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* diff                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface DiffOptions extends DriftPolicy {
+  json?: boolean;
+}
+
+export function cmdDiff(aPath: string, bPath: string, opts: DiffOptions, io: IO): number {
+  let a: Snapshot;
+  let b: Snapshot;
+  try {
+    a = readSnapshotFile(aPath);
+    b = readSnapshotFile(bPath);
+  } catch (err) {
+    io.err(`error: ${(err as Error).message}`);
+    return EXIT_ERROR;
+  }
+  const diff = diffCatalogs(a.catalog, b.catalog);
+  const verdict = evaluate(diff, opts);
+  if (opts.json) {
+    io.out(JSON.stringify({ a: aPath, b: bPath, drift: verdict.drift, diff, verdict }, null, 2));
+  } else {
+    io.out(renderDiff(diff, verdict, { beforeLabel: aPath, afterLabel: bPath }));
+  }
+  return verdict.drift ? EXIT_DRIFT : EXIT_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* hash                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface HashOptions extends CommonOptions {
+  /** Snapshot file to hash instead of a live server. */
+  file?: string;
+}
+
+export async function cmdHash(opts: HashOptions, io: IO): Promise<number> {
+  try {
+    if (opts.file !== undefined) {
+      const snap = readSnapshotFile(opts.file);
+      const fp = fingerprint(snap.catalog);
+      if (fp !== snap.sha256) {
+        io.err(`warning: ${opts.file}: header sha256 ${snap.sha256} does not match body ${fp}; printing the body hash`);
+      }
+      io.out(fp);
+      return EXIT_OK;
+    }
+    if (!opts.target && !opts.config && !existsSync(resolve(opts.cwd ?? process.cwd(), DEFAULT_CONFIG_FILE))) {
+      throw new Error('hash needs a snapshot FILE, --url URL, `-- command args`, or a .mcp-catalog.json');
+    }
+    const resolved = resolveTargets(opts);
+    for (const spec of resolved.specs) {
+      const raw = await capture(spec.target, captureOpts(opts));
+      const snap = buildSnapshot(raw);
+      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${spec.name || raw.server.name}` : snap.sha256);
+    }
+    return EXIT_OK;
+  } catch (err) {
+    io.err(`error: ${(err as Error).message}`);
+    return EXIT_ERROR;
+  }
+}
