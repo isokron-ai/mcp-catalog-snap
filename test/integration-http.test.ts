@@ -47,7 +47,9 @@ describe('capture over Streamable HTTP', () => {
       if (!transport) {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => sessions.set(id, transport!),
+          onsessioninitialized: (id) => {
+            sessions.set(id, transport!);
+          },
         });
         const server = new McpServer({ name: 'http-demo', version: '3.1.4' });
         server.registerTool('ping', { description: 'Ping.', inputSchema: { n: z.number() } }, async () => ({ content: [] }));

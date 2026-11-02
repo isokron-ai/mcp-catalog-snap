@@ -35,7 +35,8 @@ Target options (snapshot / check / hash):
 
 check / diff options:
   --ignore-descriptions do not treat description-only changes as drift
-  --allow-additions     do not treat added tools/prompts/templates as drift
+  --allow-additions     do not treat added tools/prompts/templates as drift (a section
+                        the snapshot lists as empty is no baseline: additions there still drift)
   --update              rewrite drifted snapshots (check still exits 1)
   --json                machine-readable output
   --report FILE         (check) also write the JSON report to FILE
@@ -44,7 +45,7 @@ snapshot options:
   --no-write            print the snapshot to stdout instead of writing it
   --quiet               no summary on success
 
-Exit codes: 0 no drift · 1 drift · 2 error
+Exit codes: 0 no drift · 1 drift · 2 error · 3 snapshot failed its sha256 integrity check
 `;
 
 function timeoutMs(args: ParsedArgs): number | undefined {

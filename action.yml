@@ -100,6 +100,14 @@ runs:
           echo "drift=false" >> "$GITHUB_OUTPUT"
           if [ "$code" -eq 0 ]; then
             echo "## MCP catalog: no drift" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" -eq 3 ]; then
+            {
+              echo "## MCP catalog snapshot failed its integrity check"
+              echo
+              echo 'A committed `.mcp-catalog/` file does not match its own `sha256` (edited by hand or corrupted); nothing was compared.'
+              echo 'Restore it from git, or re-capture with `npx mcp-catalog-snap snapshot` and review the diff.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=MCP catalog snapshot tampered::stored sha256 does not match the snapshot's catalog body"
           fi
         fi
         rm -f mcp-catalog-check.txt

@@ -149,6 +149,35 @@ describe('evaluate (drift policy)', () => {
     expect(v.waived).toEqual(['tool added: extra']);
   });
 
+  it('allowAdditions does not waive additions to a section the snapshot lists as empty', () => {
+    const empty = catalog([]);
+    const v = evaluate(diffCatalogs(empty, base), { allowAdditions: true });
+    expect(v.drift).toBe(true);
+    expect(v.waived).toEqual([]);
+    expect(v.reasons).toEqual([
+      'tools: snapshot lists none, live server lists 2 — --allow-additions waives additions only against a non-empty baseline; re-snapshot if this is intended',
+      'tool added: get_doc',
+      'tool added: put_doc',
+    ]);
+    // same rule per section: a first prompt on a server whose snapshot has none is not waived
+    const withPrompt = catalog(clone(base.tools), { prompts: [{ name: 'p' }] });
+    const p = evaluate(diffCatalogs(base, withPrompt), { allowAdditions: true });
+    expect(p.drift).toBe(true);
+    expect(p.reasons[0]).toMatch(/^prompts: snapshot lists none, live server lists 1/);
+    // and without allowAdditions nothing changes: plain additions, no baseline note
+    expect(evaluate(diffCatalogs(empty, base)).reasons).toEqual(['tool added: get_doc', 'tool added: put_doc']);
+  });
+
+  it('allowAdditions waives additions against a non-empty baseline, whatever the size gap', () => {
+    const one = catalog([clone(base.tools[0]!)]);
+    const many = catalog([...clone(base.tools), ...['c', 'd', 'e'].map((name) => ({ name, inputSchema: { type: 'object' } }))]);
+    const v = evaluate(diffCatalogs(one, many), { allowAdditions: true });
+    expect(v.drift).toBe(false);
+    expect(v.waived).toEqual(['tool added: c', 'tool added: d', 'tool added: e', 'tool added: put_doc']);
+    // two empty sections on both sides are not drift
+    expect(evaluate(diffCatalogs(catalog([]), catalog([])), { allowAdditions: true }).drift).toBe(false);
+  });
+
   it('removals and schema changes are never waived', () => {
     const after = catalog([
       { ...clone(base.tools[0]!), inputSchema: { type: 'object', properties: {}, required: [] } },

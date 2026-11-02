@@ -54,7 +54,13 @@ export interface CatalogDiff {
 export interface DriftPolicy {
   /** Do not count description-only changes (top-level or nested) as drift. */
   ignoreDescriptions?: boolean;
-  /** Do not count added tools/prompts/templates as drift. */
+  /**
+   * Do not count added tools/prompts/templates as drift: entries the live
+   * server lists that the snapshot does not, *where the snapshot's section is
+   * a real baseline*. When the snapshot lists no entries at all in a section
+   * and the live server lists some, nothing in that section was ever checked,
+   * so those additions are not waived (an emptied snapshot must not pass).
+   */
   allowAdditions?: boolean;
 }
 
@@ -145,6 +151,12 @@ const SINGULAR: Record<Section, string> = {
   resourceTemplates: 'resource template',
 };
 
+const PLURAL: Record<Section, string> = {
+  tools: 'tools',
+  prompts: 'prompts',
+  resourceTemplates: 'resource templates',
+};
+
 /** Apply a drift policy to a diff. */
 export function evaluate(diff: CatalogDiff, policy: DriftPolicy = {}): Verdict {
   const reasons: string[] = [];
@@ -152,8 +164,19 @@ export function evaluate(diff: CatalogDiff, policy: DriftPolicy = {}): Verdict {
   for (const s of diff.sections) {
     const noun = SINGULAR[s.section];
     for (const k of s.removed) reasons.push(`${noun} removed: ${k}`);
+    // An addition is a live entry beyond a baseline the snapshot actually
+    // holds. A snapshot section with zero entries is no baseline: waiving
+    // there would let a snapshot whose entries were deleted pass `check`.
+    const baseline = diff.counts.before[s.section] > 0;
+    const waiveAdditions = policy.allowAdditions === true && baseline;
+    if (policy.allowAdditions === true && !baseline && s.added.length > 0) {
+      reasons.push(
+        `${PLURAL[s.section]}: snapshot lists none, live server lists ${diff.counts.after[s.section]} — ` +
+          '--allow-additions waives additions only against a non-empty baseline; re-snapshot if this is intended',
+      );
+    }
     for (const k of s.added) {
-      (policy.allowAdditions ? waived : reasons).push(`${noun} added: ${k}`);
+      (waiveAdditions ? waived : reasons).push(`${noun} added: ${k}`);
     }
     for (const c of s.changed) {
       const structural = c.changes.filter((x) => !x.descriptive);

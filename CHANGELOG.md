@@ -4,6 +4,32 @@ All notable changes to mcp-catalog-snap. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses semantic versioning once past 0.x.
 
+## [0.1.1] — 2026-11-01
+
+### Fixed
+
+- A snapshot whose stored `sha256` does not match its `catalog` body is now
+  refused instead of compared with a warning. `check`, `diff` and
+  `hash FILE` exit **3** (new code: snapshot failed its integrity check;
+  takes precedence over 2 and 1), print nothing on stdout for `hash`, and
+  `check --update` leaves the file alone. The JSON report marks the server
+  `"tampered": true`. The action fails the job with its own summary and
+  annotation. There is deliberately no flag to waive it: restore the file
+  or re-capture it with `snapshot`.
+- `--allow-additions` no longer waives additions to a section the snapshot
+  lists as empty. Before, a snapshot whose `tools` were emptied passed
+  `check --allow-additions` because every live tool counted as an
+  "addition", so the check verified nothing. Additions are now waived only
+  against a non-empty baseline; an empty section that the live server fills
+  is drift, with a reason saying so. (A server gaining its very first prompt
+  or resource template under `--allow-additions` therefore needs a
+  re-snapshot.)
+
+### Added
+
+- `EXIT_TAMPERED` and `SnapshotIntegrityError` in the programmatic API;
+  `ServerResult.tampered`.
+
 ## [0.1.0] — 2026-10-31
 
 First public release.

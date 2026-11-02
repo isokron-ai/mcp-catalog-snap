@@ -64,6 +64,8 @@ export {
   EXIT_DRIFT,
   EXIT_ERROR,
   EXIT_OK,
+  EXIT_TAMPERED,
+  SnapshotIntegrityError,
   cmdCheck,
   cmdDiff,
   cmdHash,
