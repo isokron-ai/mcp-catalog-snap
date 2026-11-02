@@ -109,6 +109,8 @@ export interface ServerResult {
   ok: boolean;
   drift: boolean;
   error?: string;
+  /** The stored snapshot failed its sha256 integrity check (exit 3). */
+  tampered?: boolean;
   snapshotPath?: string;
   fingerprint?: { snapshot: string; live: string };
   serverVersion?: { snapshot: string; live: string };

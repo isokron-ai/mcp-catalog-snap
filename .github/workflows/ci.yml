@@ -26,7 +26,14 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      # Run from a copy outside the checkout: here the action path IS the
+      # checkout, whose node_modules (installed by the action with
+      # --ignore-scripts) hold kronicle-lite/sea-lite devDependencies without
+      # the better-sqlite3 binding, and `npx` inside the checkout would pick
+      # those up instead of fetching the pinned packages like a user's repo does.
+      - run: cp -r examples "$RUNNER_TEMP/examples"
       - uses: ./
         with:
-          servers-config: examples/.mcp-catalog.json
-          working-directory: examples
+          # resolved inside working-directory, like every path the action takes
+          servers-config: .mcp-catalog.json
+          working-directory: ${{ runner.temp }}/examples

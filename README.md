@@ -46,7 +46,8 @@ npx mcp-catalog-snap snapshot --url https://host/mcp --header "Authorization: Be
 
 # 3. later / in CI: re-capture and compare
 npx mcp-catalog-snap check -- npx -y kronicle-lite serve
-#    exit 0 = identical, 1 = drift, 2 = could not check
+#    exit 0 = identical, 1 = drift, 2 = could not check,
+#         3 = snapshot failed its sha256 integrity check
 ```
 
 For more than one server, list them in `.mcp-catalog.json` and run
@@ -84,7 +85,21 @@ Policy flags:
   reported but not counted as drift. The bytes still changed, so the
   cache prefix still changed; the output says so.
 - `--allow-additions` — new tools / prompts / templates are not drift.
-  Removals and changes to existing entries always are.
+  Removals and changes to existing entries always are. An addition is an
+  entry beyond a baseline the snapshot actually holds: when the snapshot
+  lists *no* entries in a section (say, `"tools": []`) and the live server
+  lists some, that section was never checked, so its additions still count
+  as drift. Re-snapshot if the server really gained its first prompt.
+
+Every command that reads a snapshot file (`check`, `diff`, `hash FILE`)
+first recomputes the sha256 of its `catalog` and compares it with the
+stored `sha256`. A mismatch means the file was edited by hand or corrupted;
+it is refused with **exit 3** before anything is compared (no policy flag
+waives it, and `check --update` does not overwrite it). Restore the file
+from git, or re-capture it with `snapshot` and review the diff. The hash is
+an integrity check, not a signature: someone who edits the catalog *and*
+recomputes `sha256` produces a valid file, which is why snapshot changes
+belong in code review.
 
 ## Output
 
@@ -163,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rafe-walker/mcp-catalog-snap@v0.1.0
+      - uses: rafe-walker/mcp-catalog-snap@v0.1.1
         with:
           servers-config: .mcp-catalog.json   # default
           # ignore-descriptions: 'true'
@@ -173,13 +188,14 @@ jobs:
 ```
 
 On drift the job fails, the readable diff goes to the step summary, and the
-`drift` output is `"true"`. The action builds the pinned copy of the CLI
+`drift` output is `"true"`. A snapshot that fails its integrity check
+fails the job too (exit 3, `drift` stays `"false"`). The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
 ### Plain shell
 
 ```yaml
-      - run: npx -y mcp-catalog-snap@0.1.0 check
+      - run: npx -y mcp-catalog-snap@0.1.1 check
 ```
 
 When a change is intended, re-run `snapshot` (or `check --update`) and

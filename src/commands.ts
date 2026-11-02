@@ -6,6 +6,9 @@
  *   0  no drift / success
  *   1  drift detected (check, diff)
  *   2  usage, config, connection or I/O error
+ *   3  a snapshot file failed its integrity check (stored sha256 does not
+ *      match its catalog body): the baseline cannot be trusted, so nothing
+ *      was compared. Takes precedence over 2 and 1.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -29,6 +32,25 @@ import { VERSION } from './version.js';
 export const EXIT_OK = 0;
 export const EXIT_DRIFT = 1;
 export const EXIT_ERROR = 2;
+export const EXIT_TAMPERED = 3;
+
+/** A snapshot whose stored sha256 does not match its catalog body. */
+export class SnapshotIntegrityError extends Error {
+  readonly path: string;
+  readonly stored: string;
+  readonly body: string;
+  constructor(path: string, stored: string, body: string) {
+    super(
+      `${path}: stored sha256 ${stored} does not match its catalog body ${body} — the snapshot was edited by hand ` +
+        'or corrupted, so it is not a trustworthy baseline. Restore it from version control, or re-capture it with ' +
+        '`mcp-catalog-snap snapshot` and review the diff before committing.',
+    );
+    this.name = 'SnapshotIntegrityError';
+    this.path = path;
+    this.stored = stored;
+    this.body = body;
+  }
+}
 
 export interface IO {
   out: (line: string) => void;
@@ -101,6 +123,13 @@ function snapshotPath(dir: string, name: string): string {
 function readSnapshotFile(path: string): Snapshot {
   const text = readFileSync(path, 'utf8');
   return parseSnapshot(text, path);
+}
+
+/** Read a snapshot and refuse it when its stored sha256 does not match its body. */
+function readVerifiedSnapshot(path: string): Snapshot {
+  const snap = readSnapshotFile(path);
+  if (!snapshotSelfConsistent(snap)) throw new SnapshotIntegrityError(path, snap.sha256, fingerprint(snap.catalog));
+  return snap;
 }
 
 function captureOpts(o: CommonOptions): CaptureOptions {
@@ -189,10 +218,9 @@ export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
       if (!existsSync(path)) {
         throw new Error(`no snapshot at ${path} — run \`mcp-catalog-snap snapshot\` first`);
       }
-      const stored = readSnapshotFile(path);
-      if (!snapshotSelfConsistent(stored)) {
-        io.err(`warning: ${path}: stored sha256 does not match its catalog body (hand-edited?); comparing against the body`);
-      }
+      // Integrity first: a hand-edited baseline (e.g. tools emptied) would
+      // otherwise be compared as if it were a real capture.
+      const stored = readVerifiedSnapshot(path);
       const diff = diffCatalogs(stored.catalog, live.catalog);
       const verdict = evaluate(diff, policy);
       results.push({
@@ -218,11 +246,18 @@ export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
         if (!opts.json) io.out(`updated ${path}`);
       }
     } catch (err) {
-      results.push({ server: label, ok: false, drift: false, error: (err as Error).message });
+      const tampered = err instanceof SnapshotIntegrityError;
+      const r: ServerResult = { server: label, ok: false, drift: false, error: (err as Error).message };
+      if (tampered) {
+        r.tampered = true;
+        r.snapshotPath = err.path;
+      }
+      results.push(r);
       if (!opts.json) io.err(`error: ${label}: ${(err as Error).message}`);
     }
   }
 
+  const anyTampered = results.some((r) => r.tampered === true);
   const anyError = results.some((r) => !r.ok);
   const anyDrift = results.some((r) => r.drift);
   const report: CheckReport = {
@@ -245,6 +280,7 @@ export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
     const n = results.length;
     io.out(anyDrift ? `${results.filter((r) => r.drift).length}/${n} server(s) drifted` : `${n}/${n} server(s) match their snapshot`);
   }
+  if (anyTampered) return EXIT_TAMPERED;
   if (anyError) return EXIT_ERROR;
   return anyDrift ? EXIT_DRIFT : EXIT_OK;
 }
@@ -261,11 +297,11 @@ export function cmdDiff(aPath: string, bPath: string, opts: DiffOptions, io: IO)
   let a: Snapshot;
   let b: Snapshot;
   try {
-    a = readSnapshotFile(aPath);
-    b = readSnapshotFile(bPath);
+    a = readVerifiedSnapshot(aPath);
+    b = readVerifiedSnapshot(bPath);
   } catch (err) {
     io.err(`error: ${(err as Error).message}`);
-    return EXIT_ERROR;
+    return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
   const diff = diffCatalogs(a.catalog, b.catalog);
   const verdict = evaluate(diff, opts);
@@ -289,12 +325,10 @@ export interface HashOptions extends CommonOptions {
 export async function cmdHash(opts: HashOptions, io: IO): Promise<number> {
   try {
     if (opts.file !== undefined) {
-      const snap = readSnapshotFile(opts.file);
-      const fp = fingerprint(snap.catalog);
-      if (fp !== snap.sha256) {
-        io.err(`warning: ${opts.file}: header sha256 ${snap.sha256} does not match body ${fp}; printing the body hash`);
-      }
-      io.out(fp);
+      // Nothing on stdout for a tampered file, so `$(mcp-catalog-snap hash F)`
+      // cannot pick up a hash that no capture ever produced.
+      const snap = readVerifiedSnapshot(opts.file);
+      io.out(snap.sha256);
       return EXIT_OK;
     }
     if (!opts.target && !opts.config && !existsSync(resolve(opts.cwd ?? process.cwd(), DEFAULT_CONFIG_FILE))) {
@@ -309,6 +343,6 @@ export async function cmdHash(opts: HashOptions, io: IO): Promise<number> {
     return EXIT_OK;
   } catch (err) {
     io.err(`error: ${(err as Error).message}`);
-    return EXIT_ERROR;
+    return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
 }

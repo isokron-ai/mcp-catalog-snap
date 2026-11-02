@@ -108,6 +108,20 @@ describe('cli', () => {
     expect(r.stdout.trim()).toBe(stored);
   });
 
+  it('diff and hash FILE refuse a snapshot whose sha256 does not match its body (exit 3)', () => {
+    const t = join(dir, 'tampered.json');
+    const doc = JSON.parse(readFileSync(a, 'utf8')) as { catalog: { tools: unknown[] } };
+    doc.catalog.tools = [];
+    writeFileSync(t, JSON.stringify(doc));
+    for (const args of [['diff', a, t], ['diff', t, a], ['diff', t, a, '--allow-additions'], ['hash', t]]) {
+      const r = run(args);
+      expect(r.code, args.join(' ')).toBe(3);
+      expect(r.stdout, args.join(' ')).toBe('');
+      expect(r.stderr, args.join(' ')).toMatch(/stored sha256 [0-9a-f]{64} does not match its catalog body/);
+    }
+    expect(run(['help']).stdout).toContain('3 snapshot failed its sha256 integrity check');
+  });
+
   it('check / snapshot / hash with no target and no config exit 2 with a hint', () => {
     for (const cmd of ['check', 'snapshot', 'hash']) {
       const r = run([cmd], dir);

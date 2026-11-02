@@ -12,10 +12,16 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { capture, type Target } from '../src/capture.js';
-import { cmdCheck, cmdHash, cmdSnapshot, EXIT_DRIFT, EXIT_ERROR, EXIT_OK, type IO } from '../src/commands.js';
-import { parseSnapshot, snapshotSelfConsistent } from '../src/snapshot.js';
+import { fingerprint } from '../src/canonical.js';
+import { cmdCheck, cmdHash, cmdSnapshot, EXIT_DRIFT, EXIT_ERROR, EXIT_OK, EXIT_TAMPERED, type IO } from '../src/commands.js';
+import { parseSnapshot, serializeSnapshot, snapshotSelfConsistent, type Snapshot } from '../src/snapshot.js';
 
 const KRONICLE_CLI = fileURLToPath(new URL('../node_modules/kronicle-lite/dist/cli.js', import.meta.url));
+
+/** Write a snapshot as a genuine (older) capture would: sha256 recomputed over the body. */
+function writeGenuine(path: string, snap: Snapshot): void {
+  writeFileSync(path, serializeSnapshot({ ...snap, sha256: fingerprint(snap.catalog) }));
+}
 
 function mkIO(): IO & { stdout: string[]; stderr: string[] } {
   const stdout: string[] = [];
@@ -68,7 +74,7 @@ describe('stdio spawn of kronicle-lite', () => {
     const tool = snap.catalog.tools.find((t) => t.name === 'get_system_state')!;
     const original = tool.description!;
     tool.description = `${original} (stale wording)`;
-    writeFileSync(path, JSON.stringify(snap, null, 2));
+    writeGenuine(path, snap);
 
     const io = mkIO();
     const code = await cmdCheck({ childStderr: 'ignore', target, dir: join(work, 'snaps'), cwd: work }, io);
@@ -78,7 +84,7 @@ describe('stdio spawn of kronicle-lite', () => {
     expect(out).toContain('/description (description)');
     expect(out).toContain('DRIFT: 1 reason(s)');
     expect(out).toContain('tool description changed: get_system_state (/description)');
-    expect(io.stderr.join('\n')).toContain('stored sha256 does not match');
+    expect(io.stderr).toEqual([]);
 
     // policy waiver
     const io2 = mkIO();
@@ -97,7 +103,7 @@ describe('stdio spawn of kronicle-lite', () => {
     const path = join(work, 'snaps', 'kronicle-lite.json');
     const snap = parseSnapshot(readFileSync(path, 'utf8'), path);
     snap.catalog.tools = snap.catalog.tools.filter((t) => t.name !== 'get_system_state');
-    writeFileSync(path, JSON.stringify(snap, null, 2));
+    writeGenuine(path, snap);
 
     const io = mkIO();
     const code = await cmdCheck({ childStderr: 'ignore', target, dir: join(work, 'snaps'), cwd: work, json: true }, io);
@@ -133,9 +139,101 @@ describe('stdio spawn of kronicle-lite', () => {
     const file = mkIO();
     expect(await cmdHash({ file: join(work, 'snaps', 'kronicle-lite.json') }, file)).toBe(EXIT_OK);
     expect(live.stdout[0]).toMatch(/^[0-9a-f]{64}$/);
-    // the file was edited in the previous test, so its body hash differs from live
+    // the file is an older genuine capture (one tool fewer), so its hash differs from live
     expect(file.stdout[0]).toMatch(/^[0-9a-f]{64}$/);
-    expect(file.stderr.join('\n')).toContain('does not match body');
+    expect(file.stdout[0]).not.toBe(live.stdout[0]);
+    expect(file.stderr).toEqual([]);
+  });
+});
+
+describe('tampered snapshots (P2-15)', () => {
+  let work: string;
+  let target: Target;
+  let path: string;
+  let pristine: string;
+
+  beforeAll(async () => {
+    work = mkdtempSync(join(tmpdir(), 'mcs-tamper-'));
+    target = { kind: 'stdio', command: process.execPath, args: [KRONICLE_CLI, 'serve', '--data-dir', join(work, 'data')] };
+    expect(await cmdSnapshot({ childStderr: 'ignore', target, dir: join(work, 'snaps'), cwd: work, quiet: true }, mkIO())).toBe(EXIT_OK);
+    path = join(work, 'snaps', 'kronicle-lite.json');
+    pristine = readFileSync(path, 'utf8');
+  });
+
+  /** Edit the stored file as JSON, leaving its sha256 field as it was. */
+  function tamper(edit: (doc: { sha256: string; catalog: Snapshot['catalog'] }) => void): void {
+    const doc = JSON.parse(pristine) as { sha256: string; catalog: Snapshot['catalog'] };
+    edit(doc);
+    writeFileSync(path, JSON.stringify(doc));
+  }
+  const check = (extra: Partial<Parameters<typeof cmdCheck>[0]> = {}) => {
+    const io = mkIO();
+    return cmdCheck({ childStderr: 'ignore', target, dir: join(work, 'snaps'), cwd: work, ...extra }, io).then((code) => ({ code, io }));
+  };
+
+  it('a description edited by hand (stale sha256) is exit 3, not a drift diff', async () => {
+    tamper((d) => {
+      d.catalog.tools[0]!.description = 'edited by hand';
+    });
+    const { code, io } = await check();
+    expect(code).toBe(EXIT_TAMPERED);
+    expect(io.stderr.join('\n')).toMatch(/stored sha256 [0-9a-f]{64} does not match its catalog body [0-9a-f]{64}/);
+    expect(io.stdout.join('\n')).not.toContain('DRIFT');
+  });
+
+  it('tools emptied by hand fail with exit 3, with and without --allow-additions or --ignore-descriptions', async () => {
+    tamper((d) => {
+      d.catalog.tools = [];
+    });
+    expect((await check()).code).toBe(EXIT_TAMPERED);
+    expect((await check({ allowAdditions: true })).code).toBe(EXIT_TAMPERED);
+    expect((await check({ allowAdditions: true, ignoreDescriptions: true })).code).toBe(EXIT_TAMPERED);
+  });
+
+  it('only the sha256 field wrong (catalog intact) is still exit 3', async () => {
+    tamper((d) => {
+      d.sha256 = '0'.repeat(64);
+    });
+    expect((await check()).code).toBe(EXIT_TAMPERED);
+  });
+
+  it('--update does not overwrite a tampered snapshot; --json marks it', async () => {
+    tamper((d) => {
+      d.catalog.tools = [];
+    });
+    const before = readFileSync(path, 'utf8');
+    const { code, io } = await check({ update: true, json: true });
+    expect(code).toBe(EXIT_TAMPERED);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+    const report = JSON.parse(io.stdout.join('\n')) as { ok: boolean; servers: Array<{ ok: boolean; tampered?: boolean; snapshotPath?: string }> };
+    expect(report.ok).toBe(false);
+    expect(report.servers[0]).toMatchObject({ ok: false, tampered: true, snapshotPath: path });
+  });
+
+  it('tools emptied with a recomputed sha256 still drift under --allow-additions (no baseline to add to)', async () => {
+    const snap = parseSnapshot(pristine, path);
+    const liveTools = snap.catalog.tools.length;
+    snap.catalog.tools = [];
+    writeGenuine(path, snap);
+    const { code, io } = await check({ allowAdditions: true });
+    expect(code).toBe(EXIT_DRIFT);
+    const out = io.stdout.join('\n');
+    expect(out).toContain(`tools: snapshot lists none, live server lists ${liveTools}`);
+    expect(out).not.toContain('waived by policy');
+  });
+
+  it('a genuine older snapshot missing one tool still passes with --allow-additions', async () => {
+    const snap = parseSnapshot(pristine, path);
+    snap.catalog.tools = snap.catalog.tools.filter((t) => t.name !== 'recall');
+    writeGenuine(path, snap);
+    const { code, io } = await check({ allowAdditions: true });
+    expect(code).toBe(EXIT_OK);
+    expect(io.stdout.join('\n')).toContain('tool added: recall');
+  });
+
+  it('restoring the committed bytes passes again', async () => {
+    writeFileSync(path, pristine);
+    expect((await check()).code).toBe(EXIT_OK);
   });
 });
 
