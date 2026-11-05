@@ -20,6 +20,7 @@ import { DEFAULT_CONFIG_FILE, DEFAULT_SNAPSHOT_DIR, loadConfig, type ServerSpec 
 import { diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
 import { renderDiff, renderSnapshotHeader, type CheckReport, type ServerResult } from './render.js';
 import {
+  SnapshotIntegrityError,
   buildSnapshot,
   parseSnapshot,
   safeFileName,
@@ -34,23 +35,7 @@ export const EXIT_DRIFT = 1;
 export const EXIT_ERROR = 2;
 export const EXIT_TAMPERED = 3;
 
-/** A snapshot whose stored sha256 does not match its catalog body. */
-export class SnapshotIntegrityError extends Error {
-  readonly path: string;
-  readonly stored: string;
-  readonly body: string;
-  constructor(path: string, stored: string, body: string) {
-    super(
-      `${path}: stored sha256 ${stored} does not match its catalog body ${body} — the snapshot was edited by hand ` +
-        'or corrupted, so it is not a trustworthy baseline. Restore it from version control, or re-capture it with ' +
-        '`mcp-catalog-snap snapshot` and review the diff before committing.',
-    );
-    this.name = 'SnapshotIntegrityError';
-    this.path = path;
-    this.stored = stored;
-    this.body = body;
-  }
-}
+export { SnapshotIntegrityError };
 
 export interface IO {
   out: (line: string) => void;

@@ -14,7 +14,11 @@ export {
   capture,
   captureFromTransport,
   describeTarget,
+  listCatalog,
+  openSession,
+  openSessionOnTransport,
   type CaptureOptions,
+  type Session,
   type HttpTarget,
   type StdioTarget,
   type Target,
@@ -76,6 +80,21 @@ export {
   type IO,
   type SnapshotOptions,
 } from './commands.js';
+export {
+  ADAPTERS,
+  EXEC_PROFILES,
+  POSTHOG_EXEC,
+  TOOLS_LIST_ADAPTER,
+  loadSweepInput,
+  parseToolNames,
+  parseToolsListFile,
+  sourceOf,
+  type ExecProfile,
+  type ExecRecord,
+  type LoadOptions,
+  type SourceInfo,
+  type SweepInput,
+} from './adapters/index.js';
 export {
   ANTHROPIC_API_KEY_ENV,
   DEFAULT_ANTHROPIC_MODEL,

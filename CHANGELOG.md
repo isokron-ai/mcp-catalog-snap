@@ -37,6 +37,20 @@ uses semantic versioning once past 0.x.
   `annotation-contradiction` (e.g. a `delete` tool with
   `destructiveHint: false`), `output-duplication-risk` and, for observed
   call results, `structured-content-duplicated`.
+- Adapters (`loadSweepInput`): `tools-list` for plain servers (live stdio /
+  Streamable HTTP, or a saved tools/list result, JSON-RPC response, tools
+  array or snapshot file) and `posthog-exec` for exec/CLI-style servers
+  (one `exec` tool with `tools` / `info` / `schema`). The exec adapter runs
+  read-only commands only, measures `info` output as the exposure, keeps the
+  `info --json` / `schema` views, accounts for the schema embedded as an
+  escaped string, and can save what it fetched (`serializeExecRecords`) for
+  an offline, byte-identical re-run. `ExecProfile` describes other
+  exec-style servers. Report sources never carry credentials (URL origin and
+  path only; stdio command basename only).
+- Reproduces the first PostHog audit exactly from its saved dump: 1,193
+  tools, 933,010 cl100k tokens of `info` output over the full catalog,
+  1,290,802 unsummarized, 249,001 `schema`, 210,494 descriptions, escaped vs
+  plain schema 660,351 vs 606,160 (opt-in test: `MCS_POSTHOG_RAW=…`).
 
 ## [0.1.1] — 2026-11-01
 
