@@ -17,6 +17,7 @@
  * A tool the API rejects (name pattern, schema) gets `null` and an error.
  */
 
+import { setOwn } from './canonical.js';
 import type { CatalogTool } from './snapshot.js';
 
 export const ANTHROPIC_API_KEY_ENV = 'ANTHROPIC_API_KEY';
@@ -79,14 +80,14 @@ export async function anthropicToolCounts(tools: readonly CatalogTool[], opts: A
 
   const baseline = await count(null);
   const errors: AnthropicCounts['errors'] = [];
-  const perTool: Record<string, number | null> = {};
+  const perTool = new Map<string, number | null>();
   const queue = [...tools];
   const workers = Array.from({ length: Math.max(1, opts.concurrency ?? 4) }, async () => {
     for (let t = queue.shift(); t; t = queue.shift()) {
       try {
-        perTool[t.name] = (await count([toApiTool(t)])) - baseline;
+        perTool.set(t.name, (await count([toApiTool(t)])) - baseline);
       } catch (err) {
-        perTool[t.name] = null;
+        perTool.set(t.name, null);
         errors.push({ tool: t.name, message: (err as Error).message });
       }
     }
@@ -103,7 +104,8 @@ export async function anthropicToolCounts(tools: readonly CatalogTool[], opts: A
   }
   const key = (e: { tool: string | null; message: string }): string => `${e.tool ?? ''}\u0000${e.message}`;
   errors.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
-  const sortedPerTool: Record<string, number | null> = {};
-  for (const k of Object.keys(perTool).sort()) sortedPerTool[k] = perTool[k]!;
+  // why: tool names are untrusted keys; a null-prototype object with own properties keeps `__proto__` as data.
+  const sortedPerTool = Object.create(null) as Record<string, number | null>;
+  for (const k of [...perTool.keys()].sort()) setOwn(sortedPerTool, k, perTool.get(k)!);
   return { model, baseline, catalog, perTool: sortedPerTool, errors };
 }

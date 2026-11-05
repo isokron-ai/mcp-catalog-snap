@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { CaptureOptions, Target } from '../capture.js';
+import { assertNoSecrets } from '../redact.js';
 import { EXEC_PROFILES, parseExecRecords, serializeExecRecords, sweepInputFromExecRecords, sweepInputFromExecServer } from './exec.js';
 import { TOOLS_LIST_ADAPTER, parseToolsListFile, sweepInputFromServer } from './tools-list.js';
 import type { SweepInput } from './types.js';
@@ -22,11 +23,13 @@ export interface LoadOptions extends CaptureOptions {
   name?: string;
   /** Exec adapters, live only: also write the fetched records as JSONL here. */
   saveRaw?: string;
+  /** Credentials the request carried; a raw dump containing one is refused. */
+  secrets?: string[];
 }
 
 export async function loadSweepInput(opts: LoadOptions): Promise<SweepInput> {
   const adapter = opts.adapter ?? TOOLS_LIST_ADAPTER;
-  if (!ADAPTERS.includes(adapter)) throw new Error(`unknown adapter "${adapter}" (known: ${ADAPTERS.join(', ')})`);
+  if (!ADAPTERS.includes(adapter) || (adapter !== TOOLS_LIST_ADAPTER && !Object.hasOwn(EXEC_PROFILES, adapter))) throw new Error(`unknown adapter "${adapter}" (known: ${ADAPTERS.join(', ')})`);
   if ((opts.from === undefined) === (opts.target === undefined)) {
     throw new Error('give exactly one input: --from FILE, --url URL, or `-- command args`');
   }
@@ -55,7 +58,11 @@ export async function loadSweepInput(opts: LoadOptions): Promise<SweepInput> {
   const live: Parameters<typeof sweepInputFromExecServer>[1] = { ...opts, profile: EXEC_PROFILES[adapter]! };
   if (opts.name !== undefined) live.nameOverride = opts.name;
   const { input, records } = await sweepInputFromExecServer(target, live);
-  if (opts.saveRaw !== undefined) writeFileSync(opts.saveRaw, serializeExecRecords(records), 'utf8');
+  if (opts.saveRaw !== undefined) {
+    const text = serializeExecRecords(records);
+    assertNoSecrets(text, opts.secrets ?? [], 'fetched exec output');
+    writeFileSync(opts.saveRaw, text, 'utf8');
+  }
   return input;
 }
 

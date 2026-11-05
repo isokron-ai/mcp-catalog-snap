@@ -82,23 +82,41 @@ function isObject(v: JsonValue | undefined): v is { [key: string]: JsonValue } {
 }
 
 /** Leaf-level diff of two JSON values. */
+/** Below this many path segments a change is reported at the subtree, not walked further. */
+export const MAX_DIFF_DEPTH = 256;
+
+function deepMarker(v: JsonValue | undefined): JsonValue | undefined {
+  return v === undefined ? undefined : `<subtree too deep to show; sha256 ${fingerprint(v)}>`;
+}
+
+/**
+ * Leaf-level changes between two JSON values, as RFC 6901 paths. Iterative
+ * (untrusted catalogs can nest arbitrarily deep); keys are read as own
+ * properties only, so `constructor` / `__proto__` are compared as data.
+ */
 export function diffValues(before: JsonValue | undefined, after: JsonValue | undefined, prefix = ''): PathChange[] {
-  if (before === after) return [];
-  if (isObject(before) && isObject(after)) {
-    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
-    const out: PathChange[] = [];
-    for (const k of keys) out.push(...diffValues(before[k], after[k], `${prefix}/${escapePointer(k)}`));
-    return out;
+  const out: PathChange[] = [];
+  const own = (o: { [k: string]: JsonValue }, k: string): JsonValue | undefined => (Object.hasOwn(o, k) ? o[k] : undefined);
+  const stack: [JsonValue | undefined, JsonValue | undefined, string, number][] = [[before, after, prefix, 0]];
+  while (stack.length > 0) {
+    const [b, a, p, depth] = stack.pop()!;
+    if (b === a) continue;
+    if (depth < MAX_DIFF_DEPTH && isObject(b) && isObject(a)) {
+      const keys = [...new Set([...Object.keys(b), ...Object.keys(a)])].sort();
+      for (let i = keys.length - 1; i >= 0; i--) stack.push([own(b, keys[i]!), own(a, keys[i]!), `${p}/${escapePointer(keys[i]!)}`, depth + 1]);
+      continue;
+    }
+    if (depth < MAX_DIFF_DEPTH && Array.isArray(b) && Array.isArray(a)) {
+      const n = Math.max(b.length, a.length);
+      for (let i = n - 1; i >= 0; i--) stack.push([b[i], a[i], `${p}/${i}`, depth + 1]);
+      continue;
+    }
+    if (b !== undefined && a !== undefined && canonicalJson(b) === canonicalJson(a)) continue;
+    const last = p.slice(p.lastIndexOf('/') + 1);
+    const tooDeep = depth >= MAX_DIFF_DEPTH;
+    out.push({ path: p === '' ? '/' : p, before: tooDeep ? deepMarker(b) : b, after: tooDeep ? deepMarker(a) : a, descriptive: last === 'description' });
   }
-  if (Array.isArray(before) && Array.isArray(after)) {
-    const n = Math.max(before.length, after.length);
-    const out: PathChange[] = [];
-    for (let i = 0; i < n; i++) out.push(...diffValues(before[i], after[i], `${prefix}/${i}`));
-    return out;
-  }
-  if (before !== undefined && after !== undefined && canonicalJson(before) === canonicalJson(after)) return [];
-  const last = prefix.slice(prefix.lastIndexOf('/') + 1);
-  return [{ path: prefix === '' ? '/' : prefix, before, after, descriptive: last === 'description' }];
+  return out;
 }
 
 const KEY_OF: Record<Section, string> = {

@@ -60,12 +60,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "canonicalize": "^2.1.0",
-    "js-tiktoken": "1.0.21"
+    "gpt-tokenizer": "4.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
     "@types/node": "^22.19.0",
+    "canonicalize": "^2.1.0",
     "eslint": "^9.39.0",
     "kronicle-lite": "0.2.0",
     "sea-lite": "0.1.1",

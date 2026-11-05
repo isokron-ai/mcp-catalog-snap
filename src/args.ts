@@ -116,27 +116,14 @@ export function bearerToken(args: ParsedArgs, env: NodeJS.ProcessEnv = process.e
   return token;
 }
 
-/** Secret values carried by a target (header values), for redacting error text. */
-export function targetSecrets(t: Target | undefined): string[] {
-  if (!t || t.kind !== 'http' || !t.headers) return [];
-  const out: string[] = [];
-  for (const v of Object.values(t.headers)) {
-    out.push(v);
-    const m = /^\S+\s+(.+)$/.exec(v);
-    if (m) out.push(m[1]!);
-  }
-  return out.filter((s) => s.length >= 4).sort((a, b) => b.length - a.length);
-}
-
-export function redact(text: string, secrets: readonly string[]): string {
-  let out = text;
-  for (const s of secrets) out = out.split(s).join('***');
-  return out;
-}
-
 /** Build an ad-hoc target from `--url ...` or `-- cmd args`, or undefined. */
 export function targetFromArgs(args: ParsedArgs): Target | undefined {
   const url = str(args.flags['url']);
+  if (url === undefined && (args.flags['bearer-file'] !== undefined || args.flags['bearer-env'] !== undefined)) {
+    throw new Error(
+      '--bearer-file / --bearer-env apply to --url targets only (stdio servers: --env KEY=value; .mcp-catalog.json: "headers": {"Authorization": "Bearer ${VAR}"})',
+    );
+  }
   if (url !== undefined && args.command.length > 0) {
     throw new Error('give either --url or a `-- command`, not both');
   }

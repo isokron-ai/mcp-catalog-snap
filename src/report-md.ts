@@ -16,7 +16,12 @@ export function mdText(s: string, max = 120): string {
   // eslint-disable-next-line no-control-regex -- stripping control characters from untrusted text is the point
   const flat = s.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
   const cut = flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-  return cut.replace(/[\\`*_[\]<>|~]/g, (c) => `\\${c}`);
+  // why: U+2060 WORD JOINER breaks GFM autolinks (scheme://, www.) and @-mentions without changing what a reader sees.
+  return cut
+    .replace(/[\\`*_[\]<>|~]/g, (c) => `\\${c}`)
+    .replace(/:\/\//g, ':\u2060//')
+    .replace(/\bwww\./gi, (m) => `${m.slice(0, 3)}\u2060.`)
+    .replace(/@/g, '@\u2060');
 }
 
 /** Untrusted text as a code span; backticks and newlines removed so the span cannot be closed early. */

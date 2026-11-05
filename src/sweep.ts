@@ -157,15 +157,15 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
 
   for (const tool of input.catalog.tools) {
     const m = measureTool(tool, toks);
-    const exposureText = input.exposure[tool.name] ?? canonicalJson(tool);
-    const exposure = input.exposure[tool.name] === undefined ? m.total : measure(exposureText, toks);
+    const exposureText = input.exposure.get(tool.name);
+    const exposure = exposureText === undefined ? m.total : measure(exposureText, toks);
     exposureTotal = addMeasures(exposureTotal, exposure);
     for (const f of TOOL_FIELDS) {
       const fm = m.fields[f];
       if (fm) fieldTotals[f] = addMeasures(fieldTotals[f] ?? emptyMeasure(toks), fm);
     }
     const views: Record<string, Measure> = {};
-    for (const [v, text] of Object.entries(input.views[tool.name] ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const [v, text] of [...(input.views.get(tool.name) ?? new Map<string, string>())].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       views[v] = measure(text, toks);
       viewTotals[v] = addMeasures(viewTotals[v] ?? emptyMeasure(toks), views[v]);
     }
@@ -178,7 +178,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       if (toolBudget !== undefined) toolsOver.push(tool.name);
     }
 
-    const emb = input.embeddedSchemas[tool.name];
+    const emb = input.embeddedSchemas.get(tool.name);
     if (emb) {
       embeddedCount++;
       const e = measure(emb.escaped, toks);
@@ -209,7 +209,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       exposure,
       fields: m.fields,
       views,
-      anthropicTokens: anthropicPerTool ? (anthropicPerTool[tool.name] ?? null) : null,
+      anthropicTokens: anthropicPerTool && Object.hasOwn(anthropicPerTool, tool.name) ? anthropicPerTool[tool.name]! : null,
       annotations: {
         readOnlyHint: hint(tool.annotations, 'readOnlyHint'),
         destructiveHint: hint(tool.annotations, 'destructiveHint'),

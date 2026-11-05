@@ -9,7 +9,8 @@
  *   mcp-catalog-snap sweep    [--from FILE | --url U | -- cmd args...] [--adapter A] [--json] ...
  */
 
-import { bool, parseArgs, redact, str, targetFromArgs, targetSecrets, type ParsedArgs } from './args.js';
+import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js';
+import { redact, redactingIO, targetSecrets } from './redact.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
 import { VERSION } from './version.js';
@@ -133,7 +134,9 @@ function optional<T>(key: string, v: T | undefined): Record<string, T> {
   return v === undefined ? {} : { [key]: v };
 }
 
-export async function main(argv: string[], io: IO): Promise<number> {
+export async function main(argv: string[], rawIo: IO): Promise<number> {
+  // Every byte the CLI prints or writes goes through this scrubber; commands add their configured targets' secrets.
+  let io: IO = rawIo;
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -154,6 +157,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
   try {
     const target = targetFromArgs(args);
     secrets = targetSecrets(target);
+    io = redactingIO(rawIo, secrets);
     const common = {
       ...optional('target', target),
       ...optional('name', str(args.flags['name'])),

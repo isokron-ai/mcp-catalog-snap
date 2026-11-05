@@ -14,7 +14,7 @@ import {
 import { PathSet, pointer, resolveLocalRef, schemaNodes } from '../src/schema-walk.js';
 import type { CatalogTool } from '../src/snapshot.js';
 import { loadTokenizer } from '../src/tokenize.js';
-import { keywordProblems, safeToRun, validateValue } from '../src/validate.js';
+import { keywordProblems, validateValue } from '../src/validate.js';
 
 const rules = (fs: Finding[]): string[] => fs.map((f) => `${f.rule} ${f.path}`);
 
@@ -98,7 +98,7 @@ describe('validity rules', () => {
         a: { type: 'integer', default: 'ten' },
         b: { enum: ['x', 'y'], default: 'z' },
         c: { type: 'number', maximum: 5, default: 6 },
-        d: { type: 'string', pattern: '^[a-z]+$', default: 'ABC' },
+        d: { type: 'string', minLength: 5, default: 'ABC' },
         e: { $ref: '#/$defs/Pos', default: 0 },
         ok1: { type: 'integer', default: 3 },
         ok2: { anyOf: [{ type: 'string' }, { type: 'null' }], default: null },
@@ -277,13 +277,10 @@ describe('untyped, escaped JSON, annotations, output duplication', () => {
     const a = analyzeTool({ name: 't', description: long, inputSchema: { type: 'object', properties: { p: { type: 'string', description: 'ok' } } } });
     expect(rules(a.findings.filter((f) => f.rule === 'description-oversize'))).toEqual(['description-oversize /description']);
     expect(analyzeTool({ name: 't', description: long, inputSchema: { type: 'object' } }, { maxDescriptionBytes: 50_000 }).findings.some((f) => f.rule === 'description-oversize')).toBe(false);
-    expect(safeToRun('^(a+)+$', 'aaaa')).toBe(false);
-    expect(safeToRun('^([a-z]*)*x', 'a')).toBe(false);
-    expect(safeToRun('^(\\w)\\1$', 'aa')).toBe(false);
-    expect(safeToRun('^[a-z]+(-[a-z]+)?$', 'ab-cd')).toBe(true);
     const started = Date.now();
     const evil = analyzeTool({ name: 't', inputSchema: { type: 'object', properties: { p: { type: 'string', pattern: '^(a+)+$', default: `${'a'.repeat(40)}!` } } } });
     expect(Date.now() - started).toBeLessThan(1000);
+    expect(evil.findings.map((f) => f.rule)).toContain('default-unchecked');
     expect(evil.findings.some((f) => f.rule === 'default-invalid')).toBe(false);
     const hugeDrf = `* \`a\` - A\n${'y'.repeat(1 << 20)}`;
     expect(drfValues(hugeDrf)).toEqual([]);

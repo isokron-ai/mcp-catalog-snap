@@ -11,7 +11,7 @@
  *      was compared. Takes precedence over 2 and 1.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { fingerprint } from './canonical.js';
@@ -29,6 +29,7 @@ import {
   type Snapshot,
 } from './snapshot.js';
 import { VERSION } from './version.js';
+import { assertNoSecrets, redactingIO, targetSecrets, writeText, type IO } from './redact.js';
 
 export const EXIT_OK = 0;
 export const EXIT_DRIFT = 1;
@@ -37,10 +38,7 @@ export const EXIT_TAMPERED = 3;
 
 export { SnapshotIntegrityError };
 
-export interface IO {
-  out: (line: string) => void;
-  err: (line: string) => void;
-}
+export type { IO };
 
 export interface TargetSelection {
   /** Ad-hoc target from --url / `-- cmd`. */
@@ -134,14 +132,20 @@ export interface SnapshotOptions extends CommonOptions {
   noWrite?: boolean;
 }
 
-export async function cmdSnapshot(opts: SnapshotOptions, io: IO): Promise<number> {
+/** Wrap `io` so output and report files are scrubbed of every credential the resolved targets carry. */
+function scrubbed(io: IO, specs: ServerSpec[]): IO {
+  return redactingIO(io, specs.flatMap((s) => targetSecrets(s.target)));
+}
+
+export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<number> {
   let resolved: Resolved;
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${(err as Error).message}`);
     return EXIT_ERROR;
   }
+  const io = scrubbed(rawIo, resolved.specs);
   let failures = 0;
   for (const spec of resolved.specs) {
     try {
@@ -149,13 +153,14 @@ export async function cmdSnapshot(opts: SnapshotOptions, io: IO): Promise<number
       const snap = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
       const text = serializeSnapshot(snap);
+      assertNoSecrets(text, targetSecrets(spec.target), 'captured catalog');
       if (opts.noWrite) {
         io.out(text.trimEnd());
         continue;
       }
       mkdirSync(resolved.snapshotDir, { recursive: true });
       const path = snapshotPath(resolved.snapshotDir, name);
-      writeFileSync(path, text, 'utf8');
+      writeText(io, path, text);
       if (!opts.quiet) {
         io.out(`wrote ${path}`);
         io.out(renderSnapshotHeader(snap));
@@ -179,14 +184,15 @@ export interface CheckOptions extends CommonOptions, DriftPolicy {
   reportFile?: string;
 }
 
-export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
+export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   let resolved: Resolved;
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${(err as Error).message}`);
     return EXIT_ERROR;
   }
+  const io = scrubbed(rawIo, resolved.specs);
   const policy: DriftPolicy = {
     ignoreDescriptions: opts.ignoreDescriptions ?? false,
     allowAdditions: opts.allowAdditions ?? false,
@@ -227,7 +233,9 @@ export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
         io.out('');
       }
       if (verdict.drift && opts.update) {
-        writeFileSync(path, serializeSnapshot(live), 'utf8');
+        const text = serializeSnapshot(live);
+        assertNoSecrets(text, targetSecrets(spec.target), 'captured catalog');
+        writeText(io, path, text);
         if (!opts.json) io.out(`updated ${path}`);
       }
     } catch (err) {
@@ -253,7 +261,7 @@ export async function cmdCheck(opts: CheckOptions, io: IO): Promise<number> {
   };
   if (opts.reportFile !== undefined) {
     try {
-      writeFileSync(opts.reportFile, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+      writeText(io, opts.reportFile, `${JSON.stringify(report, null, 2)}\n`);
     } catch (err) {
       io.err(`error: cannot write report ${opts.reportFile}: ${(err as Error).message}`);
       return EXIT_ERROR;
@@ -307,7 +315,8 @@ export interface HashOptions extends CommonOptions {
   file?: string;
 }
 
-export async function cmdHash(opts: HashOptions, io: IO): Promise<number> {
+export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
+  let io = rawIo;
   try {
     if (opts.file !== undefined) {
       // Nothing on stdout for a tampered file, so `$(mcp-catalog-snap hash F)`
@@ -320,6 +329,7 @@ export async function cmdHash(opts: HashOptions, io: IO): Promise<number> {
       throw new Error('hash needs a snapshot FILE, --url URL, `-- command args`, or a .mcp-catalog.json');
     }
     const resolved = resolveTargets(opts);
+    io = scrubbed(rawIo, resolved.specs);
     for (const spec of resolved.specs) {
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
