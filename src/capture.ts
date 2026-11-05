@@ -106,47 +106,79 @@ async function listAll<T>(
   return out;
 }
 
-/** Capture using an already-constructed transport (tests use InMemoryTransport). */
-export async function captureFromTransport(rawTransport: Transport, opts: CaptureOptions = {}): Promise<RawCapture> {
+/** A connected client plus what initialize told us. Close it when done. */
+export interface Session {
+  client: Client;
+  server: RawCapture['server'];
+  capabilities: ReturnType<Client['getServerCapabilities']>;
+  protocolVersion: () => string | null;
+  requestTimeoutMs: number;
+  close: () => Promise<void>;
+}
+
+/** Connect over an already-constructed transport (tests use InMemoryTransport). */
+export async function openSessionOnTransport(rawTransport: Transport, opts: CaptureOptions = {}): Promise<Session> {
   const { transport, get } = observeProtocolVersion(rawTransport);
   const client = new Client({ name: 'mcp-catalog-snap', version: VERSION }, { capabilities: {} });
   const timeout = opts.timeoutMs ?? 30_000;
-  const reqOpts = { timeout };
+  const close = async (): Promise<void> => {
+    await client.close().catch(() => undefined);
+  };
   try {
-    await client.connect(transport, reqOpts);
-    const caps = client.getServerCapabilities() ?? {};
+    await client.connect(transport, { timeout });
     const info = client.getServerVersion();
     if (!info) throw new Error('server did not return serverInfo on initialize');
-
-    const tools = caps.tools
-      ? await listAll(async (cursor) => {
-          const r = await client.listTools(cursor ? { cursor } : {}, reqOpts);
-          return { items: r.tools, nextCursor: r.nextCursor };
-        })
-      : [];
-    const prompts = caps.prompts
-      ? await listAll(async (cursor) => {
-          const r = await client.listPrompts(cursor ? { cursor } : {}, reqOpts);
-          return { items: r.prompts, nextCursor: r.nextCursor };
-        })
-      : [];
-    const resourceTemplates = caps.resources
-      ? await listAll(async (cursor) => {
-          const r = await client.listResourceTemplates(cursor ? { cursor } : {}, reqOpts);
-          return { items: r.resourceTemplates, nextCursor: r.nextCursor };
-        })
-      : [];
-
     const server: RawCapture['server'] = { name: info.name, version: info.version };
     if (typeof info.title === 'string') server.title = info.title;
-    return { server, protocolVersion: get(), tools, prompts, resourceTemplates };
+    return { client, server, capabilities: client.getServerCapabilities(), protocolVersion: get, requestTimeoutMs: timeout, close };
+  } catch (err) {
+    await close();
+    throw err;
+  }
+}
+
+/** Connect by spawning / dialing the target. */
+export async function openSession(target: Target, opts: CaptureOptions = {}): Promise<Session> {
+  return openSessionOnTransport(makeTransport(target, opts), opts);
+}
+
+/** List tools/prompts/resource templates over an open session. */
+export async function listCatalog(session: Session): Promise<RawCapture> {
+  const { client } = session;
+  const caps = session.capabilities ?? {};
+  const reqOpts = { timeout: session.requestTimeoutMs };
+  const tools = caps.tools
+    ? await listAll(async (cursor) => {
+        const r = await client.listTools(cursor ? { cursor } : {}, reqOpts);
+        return { items: r.tools, nextCursor: r.nextCursor };
+      })
+    : [];
+  const prompts = caps.prompts
+    ? await listAll(async (cursor) => {
+        const r = await client.listPrompts(cursor ? { cursor } : {}, reqOpts);
+        return { items: r.prompts, nextCursor: r.nextCursor };
+      })
+    : [];
+  const resourceTemplates = caps.resources
+    ? await listAll(async (cursor) => {
+        const r = await client.listResourceTemplates(cursor ? { cursor } : {}, reqOpts);
+        return { items: r.resourceTemplates, nextCursor: r.nextCursor };
+      })
+    : [];
+  return { server: session.server, protocolVersion: session.protocolVersion(), tools, prompts, resourceTemplates };
+}
+
+/** Capture using an already-constructed transport (tests use InMemoryTransport). */
+export async function captureFromTransport(rawTransport: Transport, opts: CaptureOptions = {}): Promise<RawCapture> {
+  const session = await openSessionOnTransport(rawTransport, opts);
+  try {
+    return await listCatalog(session);
   } finally {
-    await client.close().catch(() => undefined);
+    await session.close();
   }
 }
 
 /** Capture by spawning / dialing the target. */
 export async function capture(target: Target, opts: CaptureOptions = {}): Promise<RawCapture> {
-  const transport = makeTransport(target, opts);
-  return captureFromTransport(transport, opts);
+  return captureFromTransport(makeTransport(target, opts), opts);
 }

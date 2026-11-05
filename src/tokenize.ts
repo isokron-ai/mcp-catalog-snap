@@ -12,10 +12,11 @@
  * Tool text is untrusted input. BPE is quadratic in the length of one
  * pre-tokenized piece, so a hostile multi-megabyte run of letters could
  * stall a sweep. Texts longer than `BOUNDED_TOKENIZE_ABOVE` UTF-16 units are
- * therefore counted in chunks of at most `TOKENIZE_CHUNK` units, cut after
- * a newline or whitespace; a run of 256+ non-space units is cut every 16. That can differ from an unchunked count by a
- * token or so per cut; real tool texts (the largest PostHog `info` payload
- * is 45K chars) stay below the threshold and are counted exactly.
+ * therefore counted in chunks of at most `TOKENIZE_CHUNK` units, cut where
+ * the pre-tokenizer would end a piece anyway, which keeps the count exact.
+ * Only a window with no such point (a run of only letters or only
+ * punctuation, which no real schema contains) is cut every 16 units and
+ * counted approximately.
  *
  * Special-token strings such as `<|endoftext|>` are counted as plain text
  * (tiktoken's `disallowed_special=()`), so a description that happens to
@@ -41,49 +42,62 @@ interface RankFile {
 
 export const BOUNDED_TOKENIZE_ABOVE = 65_536;
 export const TOKENIZE_CHUNK = 8_192;
-/** Non-whitespace runs longer than this (the hostile case) are cut into HARD_CUT pieces. */
-const LONG_RUN = 256;
 const HARD_CUT = 16;
+const LN = /[\p{L}\p{N}]/u;
 
-function pushHardCut(out: string[], run: string): void {
-  for (let i = 0; i < run.length; ) {
-    let end = Math.min(i + HARD_CUT, run.length);
-    if (end < run.length && /[\uD800-\uDBFF]/.test(run[end - 1]!)) end--;
-    out.push(run.slice(i, end));
-    i = end;
-  }
-}
-
-function pushWindows(out: string[], seg: string): void {
-  // seg has no non-whitespace run over LONG_RUN, so a window always has whitespace near its end.
-  for (let i = 0; i < seg.length; ) {
-    let end = Math.min(i + TOKENIZE_CHUNK, seg.length);
-    if (end < seg.length) {
-      const window = seg.slice(i, end);
-      const nl = window.lastIndexOf('\n');
-      end = nl >= TOKENIZE_CHUNK / 2 ? i + nl + 1 : i + window.search(/\s\S*$/) + 1;
-    }
-    out.push(seg.slice(i, end));
-    i = end;
-  }
+/**
+ * True when a cl100k/o200k-style pre-tokenizer must end a piece at `i`:
+ * the previous char is a letter or digit (ending a letter run or a digit
+ * run) and the next is neither, nor an apostrophe (contractions). Pieces
+ * never span such a point, so counting the two sides separately is exact.
+ */
+function isPieceBoundary(text: string, i: number): boolean {
+  const next = text[i]!;
+  if (next === "'" || LN.test(next)) return false;
+  const prevCode = text.charCodeAt(i - 1);
+  // a low surrogate ends an astral char: test the whole pair
+  const prev = prevCode >= 0xdc00 && prevCode <= 0xdfff ? text.slice(i - 2, i) : text[i - 1]!;
+  return LN.test(prev);
 }
 
 /**
- * Split long text for bounded counting: non-whitespace runs over LONG_RUN
- * units become HARD_CUT pieces; the rest is cut into ≤ TOKENIZE_CHUNK
- * windows after a newline (else whitespace). Never splits a surrogate pair.
+ * Split long text for bounded counting into pieces of at most
+ * TOKENIZE_CHUNK units, cut at the last piece boundary in each window, so
+ * the summed count equals the unchunked count. A window with no boundary
+ * at all (a hostile run of only letters, or only punctuation) is cut every
+ * HARD_CUT units instead; only that case is approximate. Never splits a
+ * surrogate pair.
  */
 export function chunkText(text: string): string[] {
   if (text.length <= BOUNDED_TOKENIZE_ABOVE) return [text];
   const out: string[] = [];
-  const longRun = new RegExp(`\\S{${LONG_RUN + 1},}`, 'g');
-  let last = 0;
-  for (const m of text.matchAll(longRun)) {
-    if (m.index > last) pushWindows(out, text.slice(last, m.index));
-    pushHardCut(out, m[0]);
-    last = m.index + m[0].length;
+  let i = 0;
+  while (i < text.length) {
+    let end = Math.min(i + TOKENIZE_CHUNK, text.length);
+    if (end < text.length) {
+      let cut = -1;
+      for (let j = end; j > i + 1; j--) {
+        if (isPieceBoundary(text, j)) {
+          cut = j;
+          break;
+        }
+      }
+      if (cut < 0) {
+        // no boundary in the whole window: hard-cut it all, then move on
+        while (i < end) {
+          let e = Math.min(i + HARD_CUT, end);
+          const c = text.charCodeAt(e - 1);
+          if (c >= 0xd800 && c <= 0xdbff && e < text.length) e++;
+          out.push(text.slice(i, e));
+          i = e;
+        }
+        continue;
+      }
+      end = cut;
+    }
+    out.push(text.slice(i, end));
+    i = end;
   }
-  if (last < text.length) pushWindows(out, text.slice(last));
   return out;
 }
 

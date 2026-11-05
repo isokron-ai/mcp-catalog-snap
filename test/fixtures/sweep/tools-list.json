@@ -1,0 +1,197 @@
+{
+  "serverInfo": {
+    "name": "fixture-server",
+    "version": "2.3.4"
+  },
+  "tools": [
+    {
+      "name": "report-create",
+      "description": "Create a scheduled report.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "UTC",
+              "Africa/Cairo",
+              "America/Chicago",
+              "America/Denver",
+              "America/Los_Angeles",
+              "America/New_York",
+              "America/Phoenix",
+              "America/Sao_Paulo",
+              "Asia/Dubai",
+              "Asia/Kolkata",
+              "Asia/Shanghai",
+              "Asia/Singapore",
+              "Asia/Tokyo",
+              "Australia/Sydney",
+              "Europe/Berlin",
+              "Europe/Dublin",
+              "Europe/Lisbon",
+              "Europe/London",
+              "Europe/Madrid",
+              "Europe/Paris",
+              "Europe/Rome",
+              "Europe/Stockholm",
+              "Pacific/Auckland",
+              "Pacific/Honolulu",
+              "America/Anchorage"
+            ],
+            "description": "Timezone for the report.\n\n* `UTC` - UTC\n* `Africa/Cairo` - Africa/Cairo\n* `America/Chicago` - America/Chicago\n* `America/Denver` - America/Denver\n* `America/Los_Angeles` - America/Los_Angeles\n* `America/New_York` - America/New_York\n* `America/Phoenix` - America/Phoenix\n* `America/Sao_Paulo` - America/Sao_Paulo\n* `Asia/Dubai` - Asia/Dubai\n* `Asia/Kolkata` - Asia/Kolkata\n* `Asia/Shanghai` - Asia/Shanghai\n* `Asia/Singapore` - Asia/Singapore\n* `Asia/Tokyo` - Asia/Tokyo\n* `Australia/Sydney` - Australia/Sydney\n* `Europe/Berlin` - Europe/Berlin\n* `Europe/Dublin` - Europe/Dublin\n* `Europe/Lisbon` - Europe/Lisbon\n* `Europe/London` - Europe/London\n* `Europe/Madrid` - Europe/Madrid\n* `Europe/Paris` - Europe/Paris\n* `Europe/Rome` - Europe/Rome\n* `Europe/Stockholm` - Europe/Stockholm\n* `Pacific/Auckland` - Pacific/Auckland\n* `Pacific/Honolulu` - Pacific/Honolulu\n* `America/Anchorage` - America/Anchorage"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Property key to filter on, for example $browser or $os."
+                },
+                "operator": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "is_not",
+                    "icontains",
+                    "not_icontains",
+                    "regex",
+                    "not_regex",
+                    "gt",
+                    "lt"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Value compared against the property."
+                }
+              },
+              "required": [
+                "key",
+                "operator"
+              ]
+            }
+          },
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Property key to filter on, for example $browser or $os."
+                },
+                "operator": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "is_not",
+                    "icontains",
+                    "not_icontains",
+                    "regex",
+                    "not_regex",
+                    "gt",
+                    "lt"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Value compared against the property."
+                }
+              },
+              "required": [
+                "key",
+                "operator"
+              ]
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 500
+          },
+          "extra": {}
+        },
+        "required": [
+          "timezone",
+          "name"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "issue-delete",
+      "description": "Delete an issue permanently.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "run-query",
+      "description": "Run a saved query.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "default": "{\"kind\": \"HogQLQuery\", \"query\": \"select event, count() from events group by event\"}"
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {}
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array"
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "item-get",
+      "title": "Get item",
+      "description": "Fetch one item by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "required": true
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    }
+  ]
+}

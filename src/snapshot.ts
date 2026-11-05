@@ -220,6 +220,24 @@ export function parseSnapshot(text: string, source = 'snapshot'): Snapshot {
   };
 }
 
+/** A snapshot whose stored sha256 does not match its catalog body. */
+export class SnapshotIntegrityError extends Error {
+  readonly path: string;
+  readonly stored: string;
+  readonly body: string;
+  constructor(path: string, stored: string, body: string) {
+    super(
+      `${path}: stored sha256 ${stored} does not match its catalog body ${body} — the snapshot was edited by hand ` +
+        'or corrupted, so it is not a trustworthy baseline. Restore it from version control, or re-capture it with ' +
+        '`mcp-catalog-snap snapshot` and review the diff before committing.',
+    );
+    this.name = 'SnapshotIntegrityError';
+    this.path = path;
+    this.stored = stored;
+    this.body = body;
+  }
+}
+
 /** True when the stored sha256 matches the catalog body (file not hand-mangled). */
 export function snapshotSelfConsistent(snap: Snapshot): boolean {
   return fingerprint(snap.catalog) === snap.sha256;
