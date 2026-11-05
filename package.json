@@ -60,7 +60,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "canonicalize": "^2.1.0"
+    "canonicalize": "^2.1.0",
+    "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

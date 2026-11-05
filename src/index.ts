@@ -76,4 +76,40 @@ export {
   type IO,
   type SnapshotOptions,
 } from './commands.js';
+export {
+  ANTHROPIC_API_KEY_ENV,
+  DEFAULT_ANTHROPIC_MODEL,
+  anthropicToolCounts,
+  type AnthropicCountOptions,
+  type AnthropicCounts,
+} from './anthropic.js';
+export {
+  TOOL_FIELDS,
+  addMeasures,
+  contractFingerprint,
+  distribution,
+  emptyMeasure,
+  histogram,
+  measure,
+  measureTool,
+  orderedToolsFingerprint,
+  percentile,
+  type Distribution,
+  type Measure,
+  type ToolField,
+  type ToolMetrics,
+} from './metrics.js';
+export {
+  BOUNDED_TOKENIZE_ABOVE,
+  BUILTIN_TOKENIZERS,
+  TOKENIZE_CHUNK,
+  chunkText,
+  REFERENCE_TOKENIZER,
+  loadTokenizer,
+  loadTokenizers,
+  registerTokenizer,
+  utf8Bytes,
+  type Tokenizer,
+  type TokenizerFactory,
+} from './tokenize.js';
 export { VERSION } from './version.js';
