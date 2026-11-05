@@ -23,6 +23,20 @@ uses semantic versioning once past 0.x.
   fingerprint (`sha256` in snapshots) is unchanged.
 - `anthropicToolCounts`: optional provider-reported counts from Anthropic's
   `count_tokens` endpoint (per-tool marginal and whole catalog).
+- Findings engine (`analyzeTool`, `analyzeCallResult`, `summarizeFindings`),
+  dependency-free. Rules: `schema-missing`, `schema-invalid` (bad `type`
+  names, draft-03 boolean `required`, uncompilable `pattern`, dangling
+  `$ref`, root not `object`), `required-not-in-properties`,
+  `default-invalid`, `enum-large` (enum/const-union over a cap, default 20),
+  `description-repeats-enum` and `enum-in-prose` (DRF-style
+  ``* `x` - x`` lists), `duplicate-subtree` (repeated bytes, % of schema,
+  top offenders, `$defs/$ref` rewrite estimate), `escaped-json`,
+  `untyped-node`, `description-oversize` (descriptions are treated as
+  untrusted text: size-capped, never executed; regexes from schemas run only
+  when they cannot backtrack catastrophically), `oversize-tool`, `annotations-missing`,
+  `annotation-contradiction` (e.g. a `delete` tool with
+  `destructiveHint: false`), `output-duplication-risk` and, for observed
+  call results, `structured-content-duplicated`.
 
 ## [0.1.1] — 2026-11-01
 
