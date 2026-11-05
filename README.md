@@ -86,8 +86,9 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 | `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
 
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
-for `Authorization: Bearer …`. The token is never printed, logged or
-written to a report; error messages are redacted.
+for `Authorization: Bearer …` (stdio servers: `--env`; config files:
+`"headers"` with `${VAR}`). The token is never printed or written by any
+command; see [Credentials](#static-sweep).
 
 Policy flags:
 
@@ -170,7 +171,7 @@ not a Claude tokenizer; every count carries its tokenizer label.
 | --- | --- |
 | `schema-missing`, `schema-invalid` | no `inputSchema`; root not `type: "object"`; bad `type` names (`"unknown"`), draft-03 boolean `required`, uncompilable `pattern`, dangling `$ref`, malformed keywords |
 | `required-not-in-properties` | `required` names an undefined property (error when `additionalProperties: false`) |
-| `default-invalid` | a `default` that fails its own schema |
+| `default-invalid`, `default-unchecked` | a `default` that fails its own schema; or one that could not be fully checked (its `pattern` is never executed, or the validation budget ran out) |
 | `enum-large` | enum / const-union over `--enum-max` values (default 20); sizes also go in a histogram |
 | `description-repeats-enum`, `enum-in-prose` | DRF-style ``* `x` - x`` lists that restate an enum, or list values with no enum to enforce them |
 | `duplicate-subtree` | repeated subtrees ≥ 200 bytes: waste bytes, % of schema, top offenders, `$defs/$ref` rewrite estimate |
@@ -178,6 +179,7 @@ not a Claude tokenizer; every count carries its tokenizer label.
 | `untyped-node` | `{}` nodes, `items: {}`, opaque objects; exec `schema` views with `type: "unknown"` |
 | `description-oversize` | a description over `--max-description-bytes` (default 16384) |
 | `oversize-tool`, `oversize-catalog` | exposure over the budget (advisory 5,000 per tool when no budget is set) |
+| `schema-too-deep`, `analysis-budget-exceeded` | nesting past 64 levels, or a tool past its deterministic work budget: the rest of that tool is not analyzed |
 | `annotations-missing`, `annotation-contradiction` | no `readOnlyHint`/`destructiveHint`; a `delete`/`remove`/… tool with `destructiveHint: false` or `readOnlyHint: true`; both hints true |
 | `output-duplication-risk`, `structured-content-duplicated` | `outputSchema` declared (results may repeat `structuredContent` as text); with `--call-results FILE` (JSONL `{"tool","result"}`), observed duplication |
 
@@ -190,11 +192,21 @@ the same input gives a byte-identical report. Additive fields keep the
 format; a rename or removal bumps it.
 
 **Untrusted input.** Tool names, descriptions and schemas are data from the
-server. They are never executed; descriptions over the cap are flagged;
-strings over 1 MiB are measured but not scanned; schema `pattern`s run
-against defaults only when they cannot backtrack catastrophically;
-tokenization of very long text is bounded; markdown output escapes server
-text.
+server. Nothing from them is executed: schema `pattern`s are never run
+(JS regexes cannot be time-boxed), `$ref` expansion is budgeted and
+cycle-guarded, walks stop at 64 levels, serialization is iterative (any
+depth), every tool's analysis has a deterministic work budget, names like
+`__proto__` stay data, exec adapters send only `[A-Za-z0-9._:-]` names,
+descriptions over the cap are flagged, strings over 1 MiB are measured but
+not scanned, tokenization is linear, and markdown output escapes server
+text and breaks autolinks and @-mentions.
+
+**Credentials.** Bearer tokens and other credential headers (and
+credential-looking `--env` values for stdio children) are scrubbed from
+everything any command prints or writes, including text the server echoes
+back. A catalog that embeds the request's credential is refused rather than
+written to a snapshot or raw dump. Report sources keep only the URL origin
+and path, with credential-looking path segments masked.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.
