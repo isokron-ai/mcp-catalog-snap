@@ -84,6 +84,25 @@ export {
   type AnthropicCounts,
 } from './anthropic.js';
 export {
+  CHOICE_LIST_EDGES,
+  RULES,
+  analyzeCallResult,
+  analyzeTool,
+  compareFindings,
+  dedupRefs,
+  oversizeFinding,
+  summarizeFindings,
+  type ChoiceList,
+  type DuplicateStats,
+  type Finding,
+  type FindingsOptions,
+  type RuleId,
+  type RuleSummary,
+  type Severity,
+  type ToolAnalysis,
+  type UntypedStats,
+} from './findings.js';
+export {
   TOOL_FIELDS,
   addMeasures,
   contractFingerprint,
