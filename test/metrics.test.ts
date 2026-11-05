@@ -6,6 +6,7 @@ import { anthropicToolCounts } from '../src/anthropic.js';
 import { canonicalJson, fingerprint } from '../src/canonical.js';
 import {
   addMeasures,
+  contractFingerprint,
   distribution,
   histogram,
   measure,
@@ -14,7 +15,7 @@ import {
   percentile,
 } from '../src/metrics.js';
 import { buildSnapshot, type CatalogTool } from '../src/snapshot.js';
-import { loadTokenizer, loadTokenizers, registerTokenizer, utf8Bytes } from '../src/tokenize.js';
+import { TOKENIZE_CHUNK, chunkText, loadTokenizer, loadTokenizers, registerTokenizer, utf8Bytes } from '../src/tokenize.js';
 
 describe('tokenizers', () => {
   it('cl100k matches python tiktoken cl100k_base counts', async () => {
@@ -45,6 +46,23 @@ describe('tokenizers', () => {
     await expect(loadTokenizers([])).rejects.toThrow(/at least one/);
   });
 
+  it('bounds tokenization of hostile long text (chunked, near-exact, fast)', async () => {
+    const t = await loadTokenizer('cl100k');
+    expect(chunkText('short')).toEqual(['short']);
+    const lines = Array.from({ length: 4000 }, (_, i) => `line ${i}: some ordinary words here`).join('\n');
+    const chunks = chunkText(lines);
+    expect(chunks.join('')).toBe(lines);
+    expect(chunks.every((c) => c.length <= TOKENIZE_CHUNK)).toBe(true);
+    const exact = chunks.reduce((n, c) => n + c.length, 0);
+    expect(exact).toBe(lines.length);
+    const emoji = '😀'.repeat(40_000);
+    expect(chunkText(emoji).join('')).toBe(emoji);
+    expect(chunkText(emoji).every((c) => !/[\uD800-\uDBFF]$/.test(c))).toBe(true);
+    const started = Date.now();
+    expect(t.count('a'.repeat(200_000))).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   it('utf8Bytes counts bytes, not UTF-16 units', () => {
     expect(utf8Bytes('—')).toBe(3);
     expect(utf8Bytes('a')).toBe(1);
@@ -66,12 +84,19 @@ describe('measureTool', () => {
     expect(m.fields.description).toEqual({ bytes: 15, tokens: { cl100k: 4, chars4: 4 } });
     expect(m.fields.inputSchema!.bytes).toBe(canonicalJson(tool.inputSchema).length);
     expect(m.total.bytes).toBe(canonicalJson(tool).length);
-    expect(m.fingerprint).toBe(createHash('sha256').update(canonicalJson(tool)).digest('hex'));
-    expect(m.inputSchemaFingerprint).toBe(fingerprint(tool.inputSchema));
-    // wording-only change: entry fingerprint moves, schema fingerprint does not
+    expect(m.entryFingerprint).toBe(createHash('sha256').update(canonicalJson(tool)).digest('hex'));
+    expect(m.fingerprint).toBe(fingerprint({ inputSchema: tool.inputSchema }));
+    expect(m.descriptionFingerprint).toBe(fingerprint('Delete a thing.'));
+    // wording-only change: contract fingerprint stays, description + entry fingerprints move
     const m2 = measureTool({ ...tool, description: 'Remove a thing.' }, ts);
-    expect(m2.fingerprint).not.toBe(m.fingerprint);
-    expect(m2.inputSchemaFingerprint).toBe(m.inputSchemaFingerprint);
+    expect(m2.fingerprint).toBe(m.fingerprint);
+    expect(m2.descriptionFingerprint).not.toBe(m.descriptionFingerprint);
+    expect(m2.entryFingerprint).not.toBe(m.entryFingerprint);
+    // output schema is part of the contract; annotations are not
+    expect(measureTool({ ...tool, outputSchema: { type: 'object' } }, ts).fingerprint).not.toBe(m.fingerprint);
+    expect(measureTool({ ...tool, annotations: {} }, ts).fingerprint).toBe(m.fingerprint);
+    expect(contractFingerprint({ inputSchema: tool.inputSchema })).toBe(m.fingerprint);
+    expect(measureTool({ name: 'n', inputSchema: {} }, ts).descriptionFingerprint).toBe(fingerprint(null));
   });
 
   it('keeps the v0.1 catalog fingerprint unchanged (snapshot sha256 over sorted catalog)', () => {

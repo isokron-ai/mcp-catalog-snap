@@ -86,6 +86,7 @@ export {
 export {
   TOOL_FIELDS,
   addMeasures,
+  contractFingerprint,
   distribution,
   emptyMeasure,
   histogram,
@@ -99,7 +100,10 @@ export {
   type ToolMetrics,
 } from './metrics.js';
 export {
+  BOUNDED_TOKENIZE_ABOVE,
   BUILTIN_TOKENIZERS,
+  TOKENIZE_CHUNK,
+  chunkText,
   REFERENCE_TOKENIZER,
   loadTokenizer,
   loadTokenizers,

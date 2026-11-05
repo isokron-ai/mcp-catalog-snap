@@ -10,9 +10,11 @@ uses semantic versioning once past 0.x.
 
 - Size metrics (programmatic API): `measureTool` gives bytes and token counts
   per field (`name`, `title`, `description`, `inputSchema`, `outputSchema`,
-  `annotations`) and for the whole entry's canonical JSON, plus a per-tool
-  contract fingerprint (`fingerprint`, sha256 of the JCS entry) and an
-  `inputSchemaFingerprint` that ignores wording-only changes.
+  `annotations`) and for the whole entry's canonical JSON. Per-tool
+  fingerprints: `fingerprint` is the contract (sha256 of JCS
+  `{inputSchema, outputSchema}`), so a wording edit does not move it;
+  `descriptionFingerprint` hashes the description separately so wording
+  drift is visible on its own; `entryFingerprint` covers every field.
 - Pluggable tokenizers: `cl100k` (tiktoken cl100k_base via `js-tiktoken`,
   the reference scale), `o200k`, the `chars4` heuristic, and
   `registerTokenizer` for your own. Every count carries its tokenizer label.

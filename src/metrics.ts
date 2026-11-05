@@ -9,11 +9,13 @@
  *   - per field: `name`, `title`, `description` as their raw string value;
  *     `inputSchema`, `outputSchema`, `annotations` as compact JCS.
  *
- * Fingerprints:
- *   - `fingerprint`: sha256 of JCS(entry). Any change to the tool, including
- *     wording, changes it.
- *   - `inputSchemaFingerprint`: sha256 of JCS(inputSchema), so a wording-only
- *     change is distinguishable from a contract change.
+ * Fingerprints (per tool):
+ *   - `fingerprint`: the *contract* fingerprint, sha256 of
+ *     JCS({ inputSchema, outputSchema }) (absent members omitted). Wording
+ *     edits do not move it, so rule packs pinned to it survive them.
+ *   - `descriptionFingerprint`: sha256 of JCS(description ?? null), so a
+ *     wording edit shows up as description drift on its own.
+ *   - `entryFingerprint`: sha256 of JCS(entry), every field included.
  *   - the catalog fingerprint stays the v0.1 snapshot `sha256`
  *     (`fingerprint(catalog)` over sorted tools/prompts/resourceTemplates).
  *   - `orderedToolsFingerprint`: sha256 of JCS(tools array in server order).
@@ -37,8 +39,12 @@ export type ToolField = (typeof TOOL_FIELDS)[number];
 
 export interface ToolMetrics {
   name: string;
+  /** sha256 of JCS({ inputSchema, outputSchema }). */
   fingerprint: string;
-  inputSchemaFingerprint: string | null;
+  /** sha256 of JCS(description ?? null). */
+  descriptionFingerprint: string;
+  /** sha256 of JCS(whole entry). */
+  entryFingerprint: string;
   /** JCS of the whole entry. */
   total: Measure;
   /** Only fields present on the entry. */
@@ -76,11 +82,20 @@ export function measureTool(tool: CatalogTool, tokenizers: readonly Tokenizer[])
   }
   return {
     name: tool.name,
-    fingerprint: fingerprint(tool),
-    inputSchemaFingerprint: tool.inputSchema === undefined ? null : fingerprint(tool.inputSchema),
+    fingerprint: contractFingerprint(tool),
+    descriptionFingerprint: fingerprint(tool.description ?? null),
+    entryFingerprint: fingerprint(tool),
     total: measure(canonicalJson(tool), tokenizers),
     fields,
   };
+}
+
+/** sha256 of JCS({ inputSchema, outputSchema }), absent members omitted. */
+export function contractFingerprint(tool: Pick<CatalogTool, 'inputSchema' | 'outputSchema'>): string {
+  const c: Record<string, unknown> = {};
+  if (tool.inputSchema !== undefined) c['inputSchema'] = tool.inputSchema;
+  if (tool.outputSchema !== undefined) c['outputSchema'] = tool.outputSchema;
+  return fingerprint(c);
 }
 
 /** ADR-0005-compatible fingerprint: JCS over the tools array in the order the server listed them. */
