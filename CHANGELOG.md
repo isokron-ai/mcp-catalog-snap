@@ -20,19 +20,26 @@ uses semantic versioning once past 0.x.
   `--anthropic` (opt-in), `--call-results`, `--save-raw`, `--top`.
 - `--bearer-file FILE` / `--bearer-env VAR` for every `--url` command (an
   error for stdio and config targets, which take `--env` / `headers`).
-  Credentials are scrubbed centrally from everything any command prints or
-  writes (stdout, stderr, `--report`, `--md`), including text a server
-  echoes back; a catalog that embeds the request's credential is refused
-  rather than written to a snapshot, `check --update` or `--save-raw`.
-  Credential-looking URL path segments are masked in report sources.
+  Credentials are scrubbed from the report and diff *models* before any
+  renderer formats them, and again at the output layer for everything any
+  command prints or writes (stdout, stderr, `--report`, `--md`), matching
+  raw, markdown-escaped, JSON-pointer-escaped, JSON-escaped, percent-encoded
+  and base64/base64url forms, and masking a 6+ character fragment of a
+  secret at any `…` cut. A catalog that embeds the request's credential is
+  refused rather than written to a snapshot, `check --update` or
+  `--save-raw`. Credential headers shorter than 8 characters are refused
+  (they cannot be scrubbed without masking ordinary text). Credential-looking
+  URL path segments are masked in report sources.
 
 ### Changed
 
 - Tokenizer backend is `gpt-tokenizer` (same cl100k/o200k counts, verified
   against Python tiktoken; linear on hostile input) instead of
   `js-tiktoken`, whose BPE took minutes on one long word. Texts over 2,048
-  units are counted in chunks cut at pre-tokenizer piece boundaries, so the
-  counts stay exact.
+  units are counted in chunks cut only at pre-tokenizer piece boundaries (a
+  long boundary-free word stays whole), so counts are exact, never
+  approximate; adversarial long runs of letters, digits and hex,
+  contractions at chunk edges and combining marks are oracle fixtures.
 - Canonical JSON, key sorting, pretty printing and the diff are iterative:
   any nesting depth works, and `__proto__` / `constructor` keys stay data.
   Output is byte-identical to v0.1 for every catalog v0.1 could handle
@@ -42,14 +49,17 @@ uses semantic versioning once past 0.x.
 ### Security
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
-  needs one is reported as `default-unchecked`), `$ref` expansion has a step
-  budget and a cycle guard, malformed `$ref` encodings are findings, walks
+  needs one is reported as `default-unchecked`), default validation has a
+  step budget (one step per comparison) and a byte budget (each value
+  serialized once, enum membership via a set built once per enum), `$ref`
+  results are memoized per (target, value) behind a cycle guard, malformed `$ref` encodings are findings, walks
   stop at 64 levels (`schema-too-deep`), and each tool's analysis has a
   deterministic work budget (`analysis-budget-exceeded`) instead of a wall
   clock, so reports stay byte-identical.
 - Exec adapters only send names matching `[A-Za-z0-9._:-]`, and report
   rejected names (`isError`) separately from transport or timeout failures.
-- Markdown output escapes server text and breaks autolinks and @-mentions.
+- Markdown output escapes server text (including `&`, so entities cannot
+  spell a mention, link or tag) and breaks autolinks and @-mentions.
 - `runSweep`, `serializeReport`, `renderSweepMarkdown`, `cmdSweep`,
   `EXIT_BUDGET` in the programmatic API.
 

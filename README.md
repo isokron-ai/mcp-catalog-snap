@@ -193,19 +193,22 @@ format; a rename or removal bumps it.
 
 **Untrusted input.** Tool names, descriptions and schemas are data from the
 server. Nothing from them is executed: schema `pattern`s are never run
-(JS regexes cannot be time-boxed), `$ref` expansion is budgeted and
-cycle-guarded, walks stop at 64 levels, serialization is iterative (any
-depth), every tool's analysis has a deterministic work budget, names like
+(JS regexes cannot be time-boxed), default validation is budgeted in steps
+and bytes, `$ref` expansion is memoized and cycle-guarded, walks stop at
+64 levels, serialization is iterative (any depth), every tool's analysis has a deterministic work budget, names like
 `__proto__` stay data, exec adapters send only `[A-Za-z0-9._:-]` names,
 descriptions over the cap are flagged, strings over 1 MiB are measured but
-not scanned, tokenization is linear, and markdown output escapes server
-text and breaks autolinks and @-mentions.
+not scanned, tokenization is linear and exact, and markdown output escapes
+server text (entities included) and breaks autolinks and @-mentions.
 
 **Credentials.** Bearer tokens and other credential headers (and
-credential-looking `--env` values for stdio children) are scrubbed from
-everything any command prints or writes, including text the server echoes
-back. A catalog that embeds the request's credential is refused rather than
-written to a snapshot or raw dump. Report sources keep only the URL origin
+credential-looking `--env` values of 8+ characters for stdio children) are
+scrubbed from the report and diff data before anything is formatted, and
+again from everything any command prints or writes, in raw, markdown,
+JSON-pointer, JSON, percent-encoded and base64 forms, including text the
+server echoes back. A catalog that embeds the request's credential is
+refused rather than written to a snapshot or raw dump. Credential headers
+shorter than 8 characters are refused. Report sources keep only the URL origin
 and path, with credential-looking path segments masked.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
