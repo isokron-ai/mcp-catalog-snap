@@ -139,7 +139,6 @@ export {
   type ToolMetrics,
 } from './metrics.js';
 export {
-  BOUNDED_TOKENIZE_ABOVE,
   BUILTIN_TOKENIZERS,
   TOKENIZE_CHUNK,
   chunkText,

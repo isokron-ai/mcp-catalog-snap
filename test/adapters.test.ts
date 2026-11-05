@@ -29,7 +29,7 @@ describe('tools-list adapter (offline)', () => {
     expect(input.catalog.tools.map((t) => t.name)).toEqual(['issue-delete', 'item-get', 'report-create', 'run-query']);
     expect((input.orderedTools as { name: string }[]).map((t) => t.name)).toEqual(['report-create', 'issue-delete', 'run-query', 'item-get']);
     expect(input.notes[0]).toMatch(/tools only/);
-    expect(input.exposure).toEqual({});
+    expect(input.exposure.size).toBe(0);
   });
 
   it('accepts a bare array, a JSON-RPC response, and a snapshot; refuses a tampered snapshot', () => {
@@ -67,9 +67,9 @@ describe('exec adapter (offline dump)', () => {
     expect(input.adapter).toBe('posthog-exec');
     expect(input.server).toEqual({ name: 'exec-dump', version: null });
     expect(input.catalog.tools.map((t) => t.name)).toEqual(['issue-delete', 'report-create', 'run-query']);
-    expect(input.exposure['run-query']).toMatch(/^name: run-query\n/);
-    expect(Object.keys(input.views['run-query']!)).toEqual(['infoFull', 'infoJson', 'schema']);
-    const emb = input.embeddedSchemas['report-create']!;
+    expect(input.exposure.get('run-query')).toMatch(/^name: run-query\n/);
+    expect([...input.views.get('run-query')!.keys()]).toEqual(['infoFull', 'infoJson', 'schema']);
+    const emb = input.embeddedSchemas.get('report-create')!;
     expect(emb.escaped.startsWith("'{")).toBe(true);
     expect(JSON.parse(emb.plain)).toEqual(input.catalog.tools.find((t) => t.name === 'report-create')!.inputSchema);
     expect(input.findings.map((f) => [f.tool, f.data?.['unknownTypes']])).toEqual([
@@ -130,8 +130,8 @@ describe('exec adapter (live, in-memory)', () => {
       expect(input.server).toEqual({ name: 'exec-demo', version: '0.9.0' });
       expect(input.wrapperTools!.map((t) => t.name)).toEqual(['exec']);
       expect(input.catalog.tools.map((t) => t.name)).toEqual(['flag-delete', 'flag-list']);
-      expect(input.notes.join('\n')).toMatch(/1 listed name\(s\) were rejected by `info` and skipped: Available/);
-      expect(input.embeddedSchemas['flag-list']!.plain).toBe('{"type":"object","properties":{"limit":{"type":"integer"}}}');
+      expect(input.notes.join('\n')).toMatch(/1 listed name\(s\) were rejected by `info` \(isError\): Available/);
+      expect(input.embeddedSchemas.get('flag-list')!.plain).toBe('{"type":"object","properties":{"limit":{"type":"integer"}}}');
       // offline re-read of the saved records reproduces the contracts and exposures
       const dir = tmp();
       writeFileSync(join(dir, 'raw.jsonl'), serializeExecRecords(records));
@@ -139,6 +139,32 @@ describe('exec adapter (live, in-memory)', () => {
       expect(fingerprint(again.catalog)).toBe(fingerprint(input.catalog));
       expect(again.exposure).toEqual(input.exposure);
       expect(serializeExecRecords(records)).toBe(serializeExecRecords([...records].reverse().sort((a, b) => (a.name < b.name ? -1 : 1))));
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('never sends invalid names; tells rejected names from failed calls', async () => {
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    const s = new McpServer({ name: 'exec-kinds', version: '1' });
+    const sent: string[] = [];
+    s.registerTool('exec', { description: 'x', inputSchema: { command: z.string(), context: z.string(), llm_model: z.string() } }, async ({ command }) => {
+      sent.push(command);
+      if (command === 'tools') return { content: [{ type: 'text', text: JSON.stringify(['ok-tool', 'gone-tool', 'hang-tool', 'bad name', 'x;rm -rf ~', 'multi\nline']) }] };
+      if (command.endsWith(' hang-tool')) return new Promise(() => undefined);
+      if (command.endsWith(' gone-tool')) return { content: [{ type: 'text', text: 'no such tool' }], isError: true };
+      return { content: [{ type: 'text', text: command.startsWith('info --json') ? '{"name":"ok-tool","inputSchema":{"type":"object"}}' : 'name: ok-tool\n' }] };
+    });
+    await s.connect(serverT);
+    const session = await openSessionOnTransport(clientT, { timeoutMs: 300 });
+    try {
+      const { input } = await sweepInputFromExecSession(session, { profile: POSTHOG_EXEC }, { kind: 'stdio', command: 'x' });
+      expect(input.catalog.tools.map((t) => t.name)).toEqual(['ok-tool']);
+      const notes = input.notes.join('\n');
+      expect(notes).toMatch(/3 listed name\(s\) have characters outside \[A-Za-z0-9._:-\] and were not sent/);
+      expect(notes).toMatch(/1 listed name\(s\) were rejected by `info` \(isError\): gone-tool/);
+      expect(notes).toMatch(/1 tool\(s\) failed with a transport or timeout error: hang-tool \(.*\)/);
+      expect(sent.some((c) => /bad name|rm -rf|multi/.test(c))).toBe(false);
     } finally {
       await session.close();
     }
@@ -172,12 +198,12 @@ describe.runIf(RAW !== undefined && existsSync(RAW))('PostHog audit reproduction
     const sum = (f: (name: string) => number): number => input.catalog.tools.reduce((n, t) => n + f(t.name), 0);
     const got = {
       tools: input.catalog.tools.length,
-      info: sum((n) => tok(input.exposure[n]!)),
-      infoFull: sum((n) => tok(input.views[n]!['infoFull']!)),
-      schema: sum((n) => tok(input.views[n]!['schema']!)),
+      info: sum((n) => tok(input.exposure.get(n)!)),
+      infoFull: sum((n) => tok(input.views.get(n)!.get('infoFull')!)),
+      schema: sum((n) => tok(input.views.get(n)!.get('schema')!)),
       description: input.catalog.tools.reduce((n, t) => n + tok(t.description ?? ''), 0),
-      escaped: sum((n) => tok(input.embeddedSchemas[n]!.escaped)),
-      plain: sum((n) => tok(input.embeddedSchemas[n]!.plain)),
+      escaped: sum((n) => tok(input.embeddedSchemas.get(n)!.escaped)),
+      plain: sum((n) => tok(input.embeddedSchemas.get(n)!.plain)),
       summaryUnknown: input.findings.reduce((n, f) => n + Number(f.data?.['unknownTypes'] ?? 0), 0),
     };
     let waste = 0;

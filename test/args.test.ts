@@ -30,8 +30,8 @@ describe('parseArgs', () => {
 
 describe('targetFromArgs', () => {
   it('builds an http target with headers', () => {
-    const t = targetFromArgs(parseArgs(['check', '--url', 'https://h/mcp', '--header', 'Authorization: Bearer t']));
-    expect(t).toEqual({ kind: 'http', url: 'https://h/mcp', headers: { Authorization: 'Bearer t' } });
+    const t = targetFromArgs(parseArgs(['check', '--url', 'https://h/mcp', '--header', 'Authorization: Bearer t0k3n-123']));
+    expect(t).toEqual({ kind: 'http', url: 'https://h/mcp', headers: { Authorization: 'Bearer t0k3n-123' } });
   });
 
   it('builds a stdio target with env and cwd', () => {

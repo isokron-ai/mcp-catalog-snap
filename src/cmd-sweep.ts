@@ -9,17 +9,17 @@
  * Precedence: 3 > 2 > 4.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { loadSweepInput, type LoadOptions } from './adapters/index.js';
 import { ANTHROPIC_API_KEY_ENV, DEFAULT_ANTHROPIC_MODEL, anthropicToolCounts } from './anthropic.js';
-import { redact, targetSecrets } from './args.js';
 import type { Target } from './capture.js';
-import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED, type IO } from './commands.js';
+import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED } from './commands.js';
+import { redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 import { renderSweepMarkdown } from './report-md.js';
 import { SnapshotIntegrityError } from './snapshot.js';
-import { runSweep, serializeReport, type SweepOptions } from './sweep.js';
+import { runSweep, serializeReport, type SweepOptions, type SweepReport } from './sweep.js';
 import { REFERENCE_TOKENIZER, loadTokenizers } from './tokenize.js';
 
 export const EXIT_BUDGET = 4;
@@ -68,8 +68,19 @@ function readCallResults(path: string): { tool: string; result: unknown }[] {
   return out;
 }
 
-export async function cmdSweep(opts: SweepCommandOptions, io: IO): Promise<number> {
+/**
+ * Scrub the report model, then render it. Order matters: renderers escape
+ * and truncate, which would hide a credential from a scrubber that ran
+ * afterwards (the output-layer scrubber stays as a second line of defense).
+ */
+export function sweepOutputs(raw: SweepReport, variants: readonly string[], top?: number): { report: SweepReport; json: string; md: string } {
+  const report = scrubDeep(raw, variants);
+  return { report, json: serializeReport(report), md: renderSweepMarkdown(report, top !== undefined ? { top } : {}) };
+}
+
+export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<number> {
   const secrets = targetSecrets(opts.target);
+  const io = redactingIO(rawIo, secrets);
   const env = opts.env ?? process.env;
   try {
     const tokenizers = await loadTokenizers(opts.tokenizers ?? [REFERENCE_TOKENIZER]);
@@ -79,7 +90,10 @@ export async function cmdSweep(opts: SweepCommandOptions, io: IO): Promise<numbe
     if (opts.target !== undefined) load.target = opts.target;
     if (opts.name !== undefined) load.name = opts.name;
     if (opts.timeoutMs !== undefined) load.timeoutMs = opts.timeoutMs;
-    if (opts.saveRaw !== undefined) load.saveRaw = opts.saveRaw;
+    if (opts.saveRaw !== undefined) {
+      load.saveRaw = opts.saveRaw;
+      load.secrets = secrets;
+    }
     const input = await loadSweepInput(load);
 
     const sweepOpts: SweepOptions = { tokenizers, findings: {} };
@@ -98,19 +112,16 @@ export async function cmdSweep(opts: SweepCommandOptions, io: IO): Promise<numbe
         sweepOpts.anthropic = { skipped: `${ANTHROPIC_API_KEY_ENV} is not set` };
         io.err(`note: --anthropic skipped: ${ANTHROPIC_API_KEY_ENV} is not set`);
       } else {
-        secrets.push(key);
+        secrets.push(key); // the redacting IO shares this array
         const a: Parameters<typeof anthropicToolCounts>[1] = { apiKey: key, model: opts.anthropicModel ?? DEFAULT_ANTHROPIC_MODEL };
         if (opts.fetch) a.fetch = opts.fetch;
         sweepOpts.anthropic = await anthropicToolCounts(input.catalog.tools, a);
       }
     }
 
-    const report = runSweep(input, sweepOpts);
-    const json = serializeReport(report);
-    const mdOpts = opts.top !== undefined ? { top: opts.top } : {};
-    const md = renderSweepMarkdown(report, mdOpts);
-    if (opts.reportFile !== undefined) writeFileSync(opts.reportFile, json, 'utf8');
-    if (opts.mdFile !== undefined) writeFileSync(opts.mdFile, md, 'utf8');
+    const { report, json, md } = sweepOutputs(runSweep(input, sweepOpts), io.variants(), opts.top);
+    if (opts.reportFile !== undefined) writeText(io, opts.reportFile, json);
+    if (opts.mdFile !== undefined) writeText(io, opts.mdFile, md);
     io.out((opts.json ? json : md).trimEnd());
     if (report.budget.exceeded) {
       io.err(`budget exceeded: ${report.budget.toolsOver.length} tool(s) over${report.budget.catalogOver ? ', catalog over' : ''}`);
@@ -118,7 +129,7 @@ export async function cmdSweep(opts: SweepCommandOptions, io: IO): Promise<numbe
     }
     return EXIT_OK;
   } catch (err) {
-    io.err(`error: ${redact((err as Error).message, secrets)}`);
+    io.err(`error: ${(err as Error).message}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
 }

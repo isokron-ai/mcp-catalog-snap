@@ -7,8 +7,16 @@
  * `default`) against a schema for the common keywords only; anything it
  * does not understand passes, so it reports definite failures, never
  * guesses.
+ *
+ * Schemas are untrusted. `pattern` is never *executed*: V8's backtracking
+ * engine cannot be time-boxed, and catastrophic patterns are not reliably
+ * detectable, so a value whose check needed a pattern is reported as
+ * unchecked instead. Validation also has a step budget and skips a `$ref`
+ * already being expanded for the same value, so self-referencing or
+ * fan-out `$ref` graphs terminate.
  */
 
+import { canonicalJson } from './canonical.js';
 import { isObj, resolveLocalRef, type Obj } from './schema-walk.js';
 
 const TYPES = new Set(['string', 'number', 'integer', 'boolean', 'object', 'array', 'null']);
@@ -19,7 +27,11 @@ function isSchema(v: unknown): boolean {
   return isObj(v) || typeof v === 'boolean';
 }
 
+/** Longest pattern we even compile (compiling is linear; executing is what is unsafe). */
+const MAX_PATTERN_COMPILE = 4_096;
+
 function compiles(pattern: string): boolean {
+  if (pattern.length > MAX_PATTERN_COMPILE) return true; // not checked; never executed anyway
   for (const flags of ['u', '']) {
     try {
       new RegExp(pattern, flags);
@@ -64,7 +76,7 @@ export function keywordProblems(node: Obj, root: unknown): string[] {
   const ref = node['$ref'];
   if (ref !== undefined) {
     if (typeof ref !== 'string') out.push('`$ref` must be a string');
-    else if (ref.startsWith('#') && resolveLocalRef(root, ref) === undefined) out.push(`\`$ref\` ${JSON.stringify(ref)} does not resolve`);
+    else if (ref.startsWith('#') && resolveLocalRef(root, ref) === undefined) out.push(`\`$ref\` ${JSON.stringify(ref.slice(0, 200))} is malformed or does not resolve`);
   }
   const pat = node['pattern'];
   if (pat !== undefined && (typeof pat !== 'string' || !compiles(pat))) out.push(`\`pattern\` ${JSON.stringify(pat)} is not a valid regular expression`);
@@ -74,17 +86,6 @@ export function keywordProblems(node: Obj, root: unknown): string[] {
     if (v !== undefined && !(typeof v === 'number' && Number.isInteger(v) && v >= 0)) out.push(`\`${k}\` must be a non-negative integer`);
   }
   return out;
-}
-
-/**
- * Patterns come from untrusted schemas and JS regexes cannot be time-boxed,
- * so a default is only tested against a short pattern with no nested
- * quantifier (`(a+)+`, `(\\w*)*`, …), on a short value. Anything else is
- * skipped, not reported.
- */
-export function safeToRun(pattern: string, value: string): boolean {
-  if (pattern.length > 512 || value.length > 1024) return false;
-  return !/\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]/.test(pattern) && !/\\[1-9]/.test(pattern);
 }
 
 function typeOf(v: unknown): string {
@@ -99,37 +100,142 @@ function typeMatches(v: unknown, t: string): boolean {
   return actual === t || (t === 'number' && actual === 'integer');
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
-  if (isObj(a) && isObj(b)) {
-    const ka = Object.keys(a);
-    return ka.length === Object.keys(b).length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
-  }
-  return false;
+/** Shared state for one tool's `validateValue` runs. */
+export interface ValidateContext {
+  steps: number;
+  limit: number;
+  /** Bytes serialized for comparisons (charged as work, capped by byteLimit). */
+  bytes: number;
+  byteLimit: number;
+  /** A check needed a `pattern`, which is never executed. */
+  skippedPattern: boolean;
+  /** The step or byte budget ran out; the result is "unknown", not "valid". */
+  exhausted: boolean;
+  /** $ref targets currently being expanded, per value key (cycle guard). */
+  active: Map<string, Set<unknown>>;
+  /** Comparison key per object value (each value is serialized once). */
+  keys: WeakMap<object, string>;
+  /** Membership sets per enum array (built once per array). */
+  enumSets: WeakMap<unknown[], Set<string>>;
+  /** Result per ($ref target, value key). */
+  refMemo: Map<unknown, Map<string, string | null>>;
+}
+
+export function validateContext(limit = 10_000, byteLimit = 4 * 1024 * 1024): ValidateContext {
+  return {
+    steps: 0,
+    limit,
+    bytes: 0,
+    byteLimit,
+    skippedPattern: false,
+    exhausted: false,
+    active: new Map(),
+    keys: new WeakMap(),
+    enumSets: new WeakMap(),
+    refMemo: new Map(),
+  };
+}
+
+function step(ctx: ValidateContext, n = 1): boolean {
+  ctx.steps += n;
+  if (ctx.steps > ctx.limit || ctx.bytes > ctx.byteLimit) ctx.exhausted = true;
+  return !ctx.exhausted;
 }
 
 /**
- * First reason `value` fails `schema`, or null when it passes (or when the
- * schema uses only keywords this checker does not evaluate).
+ * Type-tagged canonical key: equal keys ⇔ JSON-equal values. Objects are
+ * serialized once per context (memoized by identity) and their bytes are
+ * charged; primitives are cheap except long strings, which are charged too.
  */
-export function validateValue(value: unknown, schema: unknown, root: unknown, depth = 0): string | null {
-  if (depth > 32 || schema === true || schema === undefined) return null;
+function keyOf(v: unknown, ctx: ValidateContext): string | null {
+  if (v === null || typeof v !== 'object') {
+    if (typeof v === 'string') ctx.bytes += v.length;
+    return `${typeof v}:${typeof v === 'string' ? v : JSON.stringify(v)}`;
+  }
+  const memo = ctx.keys.get(v);
+  if (memo !== undefined) return memo;
+  if (ctx.bytes > ctx.byteLimit) return null;
+  let k: string;
+  try {
+    k = `o:${canonicalJson(v)}`;
+  } catch {
+    return null;
+  }
+  ctx.bytes += k.length;
+  ctx.keys.set(v, k);
+  return k;
+}
+
+/** Is `value` JSON-equal to one of `list`? null when the budget ran out first. */
+function inList(list: unknown[], value: unknown, ctx: ValidateContext): boolean | null {
+  let set = ctx.enumSets.get(list);
+  if (!set) {
+    if (!step(ctx, list.length)) return null;
+    set = new Set();
+    for (const e of list) {
+      const k = keyOf(e, ctx);
+      if (k === null || ctx.bytes > ctx.byteLimit) {
+        ctx.exhausted = true;
+        return null;
+      }
+      set.add(k);
+    }
+    ctx.enumSets.set(list, set);
+  }
+  const k = keyOf(value, ctx);
+  if (k === null || !step(ctx)) return null;
+  return set.has(k);
+}
+
+export function validateValue(value: unknown, schema: unknown, root: unknown, ctx: ValidateContext = validateContext(), depth = 0): string | null {
+  if (ctx.exhausted) return null;
+  if (!step(ctx) || depth > 32) {
+    ctx.exhausted = true;
+    return null;
+  }
+  if (schema === true || schema === undefined) return null;
   if (schema === false) return 'schema is `false`';
   if (!isObj(schema)) return null;
   if (typeof schema['$ref'] === 'string') {
     const target = resolveLocalRef(root, schema['$ref']);
-    const r = target === undefined ? null : validateValue(value, target, root, depth + 1);
-    if (r) return r;
+    const vk = target === undefined ? null : keyOf(value, ctx);
+    if (target !== undefined && vk !== null) {
+      let memo = ctx.refMemo.get(target);
+      if (!memo) ctx.refMemo.set(target, (memo = new Map()));
+      let r: string | null | undefined = memo.get(vk);
+      if (r === undefined) {
+        let seen = ctx.active.get(vk);
+        if (!seen) ctx.active.set(vk, (seen = new Set()));
+        if (seen.has(target)) r = null; // cycle: the outer expansion decides
+        else {
+          seen.add(target);
+          r = validateValue(value, target, root, ctx, depth + 1);
+          seen.delete(target);
+          if (!ctx.exhausted) memo.set(vk, r);
+        }
+      }
+      if (r) return r;
+    } else if (target !== undefined) {
+      ctx.exhausted = true;
+      return null;
+    }
   }
   if (value === null && schema['nullable'] === true) return null;
   const t = schema['type'];
   if (t !== undefined) {
     const list = (Array.isArray(t) ? t : [t]).filter((x): x is string => typeof x === 'string' && TYPES.has(x));
-    if (list.length > 0 && !list.some((x) => typeMatches(value, x))) return `${JSON.stringify(value)} is not of type ${list.join('|')}`;
+    if (list.length > 0 && !list.some((x) => typeMatches(value, x))) return `${short(value)} is not of type ${list.join('|')}`;
   }
-  if (Array.isArray(schema['enum']) && !schema['enum'].some((e) => deepEqual(e, value))) return `${JSON.stringify(value)} is not one of the enum values`;
-  if ('const' in schema && !deepEqual(schema['const'], value)) return `${JSON.stringify(value)} is not the const ${JSON.stringify(schema['const'])}`;
+  if (Array.isArray(schema['enum'])) {
+    const hit = inList(schema['enum'], value, ctx);
+    if (hit === null) return null;
+    if (!hit) return `${short(value)} is not one of the enum values`;
+  }
+  if (Object.hasOwn(schema, 'const')) {
+    const hit = inList([schema['const']], value, ctx);
+    if (hit === null) return null;
+    if (!hit) return `${short(value)} is not the const ${short(schema['const'])}`;
+  }
   if (typeof value === 'number') {
     const n = (k: string): number | undefined => (typeof schema[k] === 'number' ? (schema[k] as number) : undefined);
     if (n('minimum') !== undefined && value < n('minimum')!) return `${value} is below minimum ${n('minimum')}`;
@@ -138,18 +244,11 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, de
     if (n('exclusiveMaximum') !== undefined && value >= n('exclusiveMaximum')!) return `${value} is not below exclusiveMaximum ${n('exclusiveMaximum')}`;
   }
   if (typeof value === 'string') {
+    ctx.bytes += value.length;
     const len = [...value].length;
     if (typeof schema['minLength'] === 'number' && len < schema['minLength']) return `string shorter than minLength ${schema['minLength']}`;
     if (typeof schema['maxLength'] === 'number' && len > schema['maxLength']) return `string longer than maxLength ${schema['maxLength']}`;
-    if (typeof schema['pattern'] === 'string' && safeToRun(schema['pattern'], value) && compiles(schema['pattern'])) {
-      let re: RegExp;
-      try {
-        re = new RegExp(schema['pattern'], 'u');
-      } catch {
-        re = new RegExp(schema['pattern']);
-      }
-      if (!re.test(value)) return `${JSON.stringify(value)} does not match pattern ${JSON.stringify(schema['pattern'])}`;
-    }
+    if (typeof schema['pattern'] === 'string') ctx.skippedPattern = true;
   }
   if (Array.isArray(value)) {
     if (typeof schema['minItems'] === 'number' && value.length < schema['minItems']) return `array shorter than minItems ${schema['minItems']}`;
@@ -157,36 +256,54 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, de
     const prefix = Array.isArray(schema['prefixItems']) ? schema['prefixItems'] : Array.isArray(schema['items']) ? schema['items'] : [];
     for (let i = 0; i < value.length; i++) {
       const s = i < prefix.length ? prefix[i] : isSchema(schema['items']) ? schema['items'] : undefined;
-      const r = validateValue(value[i], s, root, depth + 1);
+      const r = validateValue(value[i], s, root, ctx, depth + 1);
       if (r) return `[${i}]: ${r}`;
     }
   }
   if (isObj(value)) {
     const props = isObj(schema['properties']) ? schema['properties'] : {};
     if (Array.isArray(schema['required'])) {
-      for (const k of schema['required']) if (typeof k === 'string' && !(k in value)) return `missing required property "${k}"`;
+      for (const k of schema['required']) if (typeof k === 'string' && !Object.hasOwn(value, k)) return `missing required property "${k.slice(0, 80)}"`;
     }
     for (const [k, v] of Object.entries(value)) {
-      if (k in props) {
-        const r = validateValue(v, props[k], root, depth + 1);
-        if (r) return `.${k}: ${r}`;
+      if (Object.hasOwn(props, k)) {
+        const r = validateValue(v, props[k], root, ctx, depth + 1);
+        if (r) return `.${k.slice(0, 80)}: ${r}`;
       } else if (schema['additionalProperties'] === false && !isObj(schema['patternProperties'])) {
-        return `property "${k}" is not allowed (additionalProperties: false)`;
+        return `property "${k.slice(0, 80)}" is not allowed (additionalProperties: false)`;
       }
     }
   }
   if (Array.isArray(schema['allOf'])) {
     for (const s of schema['allOf']) {
-      const r = validateValue(value, s, root, depth + 1);
+      const r = validateValue(value, s, root, ctx, depth + 1);
       if (r) return r;
     }
   }
   for (const k of ['anyOf', 'oneOf']) {
     const branches = schema[k];
     // oneOf is checked as anyOf: "exactly one" is not something a default is likely to get wrong on purpose.
-    if (Array.isArray(branches) && branches.length > 0 && branches.every((b) => validateValue(value, b, root, depth + 1) !== null)) {
-      return `${JSON.stringify(value)} matches none of the ${k} branches`;
+    if (Array.isArray(branches) && branches.length > 0) {
+      let allFail = true;
+      for (const b of branches) {
+        if (validateValue(value, b, root, ctx, depth + 1) === null) {
+          allFail = false;
+          break;
+        }
+      }
+      if (allFail && !ctx.exhausted) return `${short(value)} matches none of the ${k} branches`;
     }
   }
   return null;
+}
+
+function short(v: unknown): string {
+  if (typeof v === 'string' && v.length > 200) v = `${v.slice(0, 100)}…`;
+  let s: string;
+  try {
+    s = typeof v === 'object' && v !== null ? canonicalJson(v).slice(0, 200) : (JSON.stringify(v) ?? String(v));
+  } catch {
+    s = '<value>';
+  }
+  return s.length > 80 ? `${s.slice(0, 79)}…` : s;
 }

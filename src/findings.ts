@@ -7,22 +7,26 @@
  * rename one only with a report-format bump.
  */
 
-import { canonicalJson, type JsonValue } from './canonical.js';
+import { CanonCache, canonicalJson, type JsonValue } from './canonical.js';
 import { measure } from './metrics.js';
 import {
-  allStrings,
   allSubtrees,
   isObj,
+  MAX_WALK_DEPTH,
   PathSet,
+  exceedsDepth,
+  WorkBudget,
+  WorkBudgetExceeded,
   pointer,
   schemaNodes,
   setAt,
+  type WalkOptions,
   type Obj,
   type Path,
 } from './schema-walk.js';
 import type { CatalogTool } from './snapshot.js';
 import { utf8Bytes, type Tokenizer } from './tokenize.js';
-import { keywordProblems, validateValue } from './validate.js';
+import { keywordProblems, validateContext, validateValue } from './validate.js';
 
 export type Severity = 'error' | 'warn' | 'info';
 
@@ -35,6 +39,9 @@ export const RULES = {
   'description-repeats-enum': { severity: 'warn', summary: 'description spells out values the enum already lists' },
   'enum-in-prose': { severity: 'warn', summary: 'allowed values listed only in a description, with no enum to enforce them' },
   'duplicate-subtree': { severity: 'warn', summary: 'repeated schema subtrees that $defs/$ref could emit once' },
+  'default-unchecked': { severity: 'info', summary: '`default` could not be fully checked (pattern never executed, or validation budget hit)' },
+  'schema-too-deep': { severity: 'warn', summary: 'nesting deeper than the analysis depth cap; deeper nodes were not analyzed' },
+  'analysis-budget-exceeded': { severity: 'warn', summary: 'analysis stopped at the per-tool work budget; findings for the tool are partial' },
   'description-oversize': { severity: 'warn', summary: 'description longer than the cap (descriptions are untrusted text)' },
   'escaped-json': { severity: 'info', summary: 'JSON carried as an escaped string, paying escape overhead' },
   'untyped-node': { severity: 'info', summary: 'schema nodes that accept anything ({} / items: {} / opaque objects)' },
@@ -70,11 +77,13 @@ export interface FindingsOptions {
    * measured but never scanned or parsed.
    */
   maxDescriptionBytes?: number;
+  /** Deterministic per-tool work budget, in node visits + KiB canonicalized (default 2,000,000). */
+  workBudget?: number;
   /** Reference tokenizer for $defs savings estimates (bytes only when absent). */
   tokenizer?: Tokenizer;
 }
 
-const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200, maxDescriptionBytes: 16_384 };
+const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200, maxDescriptionBytes: 16_384, workBudget: 2_000_000 };
 
 /** Strings longer than this (UTF-16 units) are never regex-scanned or JSON-parsed. */
 export const ANALYZE_MAX_CHARS = 1 << 20;
@@ -178,9 +187,10 @@ function enumValuesIn(node: unknown, depth = 0): Set<string> {
   return vals;
 }
 
-function choiceLists(schema: unknown): ChoiceList[] {
+function choiceLists(schema: unknown, w: WalkOptions): ChoiceList[] {
+  const canon = new CanonCache();
   const out: (ChoiceList & { raw: Path })[] = [];
-  for (const [p, n] of schemaNodes(schema)) {
+  for (const [p, n] of schemaNodes(schema, [], w)) {
     const c = choiceValues(n);
     const drf = drfValues(n['description']);
     if (c) {
@@ -190,7 +200,7 @@ function choiceLists(schema: unknown): ChoiceList[] {
         path: pointer([...SCHEMA_ROOT, ...p]),
         kind: c.kind,
         count: c.values.length,
-        bytes: utf8Bytes(canonicalJson(c.values)),
+        bytes: utf8Bytes(canon.get(c.values)),
         duplicated: drf.length > 0 && new Set(drf.filter((v) => sv.has(v))).size >= 0.8 * sv.size && overlap > 0,
         raw: p,
       });
@@ -224,10 +234,11 @@ function choiceLists(schema: unknown): ChoiceList[] {
 /* duplicated subtrees + $defs opportunity                            */
 /* ------------------------------------------------------------------ */
 
-function duplicateStats(schema: unknown, minBytes: number, tok: Tokenizer | undefined): DuplicateStats {
-  const schemaText = schema === undefined ? '' : canonicalJson(schema);
+function duplicateStats(schema: unknown, minBytes: number, tok: Tokenizer | undefined, w: WalkOptions): DuplicateStats {
+  const cache = new CanonCache();
+  const schemaText = schema === undefined ? '' : cache.get(schema);
   const total = utf8Bytes(schemaText);
-  const occ = collectRepeats(allSubtrees(schema), minBytes, () => false);
+  const occ = collectRepeats(allSubtrees(schema, [], w), minBytes, () => false, w.work, cache);
   const removed = new PathSet();
   let waste = 0;
   let groups = 0;
@@ -244,7 +255,7 @@ function duplicateStats(schema: unknown, minBytes: number, tok: Tokenizer | unde
     for (const p of live.slice(1)) removed.add(p);
   }
   top.sort((a, b) => b.wasteBytes - a.wasteBytes || cmp(a.path, b.path));
-  const deduped = dedupRefs(schema, minBytes);
+  const deduped = dedupRefs(schema, minBytes, w, schemaText);
   const afterText = deduped.created > 0 ? canonicalJson(deduped.schema) : schemaText;
   return {
     wasteBytes: waste,
@@ -271,11 +282,18 @@ interface Repeat {
  * Group subtrees by canonical text (≥ minBytes, root excluded), returned
  * largest first (ties by text) so greedy accounting is deterministic.
  */
-function collectRepeats(nodes: Iterable<[Path, unknown]>, minBytes: number, skip: (p: Path, n: unknown) => boolean): [string, Repeat][] {
+function collectRepeats(
+  nodes: Iterable<[Path, unknown]>,
+  minBytes: number,
+  skip: (p: Path, n: unknown) => boolean,
+  work: WorkBudget | undefined,
+  cache: CanonCache,
+): [string, Repeat][] {
   const occ = new Map<string, Repeat>();
   for (const [p, n] of nodes) {
     if (p.length === 0 || skip(p, n)) continue;
-    const s = canonicalJson(n);
+    const s = cache.get(n);
+    work?.spend(Math.ceil(s.length / 1024));
     // UTF-8 is at most 3 bytes per UTF-16 unit: skip the byte count when it cannot reach minBytes.
     if (s.length * 3 < minBytes) continue;
     let r = occ.get(s);
@@ -294,9 +312,9 @@ function collectRepeats(nodes: Iterable<[Path, unknown]>, minBytes: number, skip
  * every occurrence at it, largest first, only where the rewrite is smaller.
  * Existing `$defs` entries are kept; new ones are named `_dupN`.
  */
-export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes): { schema: unknown; created: number } {
+export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes, w: WalkOptions = {}, canonical?: string): { schema: unknown; created: number } {
   if (!isObj(schema)) return { schema, created: 0 };
-  const work = JSON.parse(JSON.stringify(schema)) as Obj;
+  const work = JSON.parse(canonical ?? canonicalJson(schema)) as Obj;
   const existing = isObj(work['$defs']) ? (work['$defs'] as Obj) : undefined;
   const defs: Obj = existing ?? {};
   let created = 0;
@@ -304,9 +322,11 @@ export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes):
   for (;;) {
     if (created > 0 || existing) work['$defs'] = defs;
     const occ = collectRepeats(
-      schemaNodes(work),
+      schemaNodes(work, [], w),
       minBytes,
       (p, n) => (p.length === 2 && p[0] === '$defs') || (isObj(n) && typeof n['$ref'] === 'string' && Object.keys(n).length === 1),
+      w.work,
+      new CanonCache(), // fresh per pass: the previous pass rewrote the tree
     );
     const replaced = new PathSet();
     let changed = false;
@@ -339,12 +359,12 @@ export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes):
 
 const STRUCTURAL = ['type', 'anyOf', 'oneOf', 'allOf', 'enum', 'const', '$ref', 'properties', 'items', 'not'];
 
-function untypedStats(schema: unknown): UntypedStats {
+function untypedStats(schema: unknown, w: WalkOptions): UntypedStats {
   const st: UntypedStats = { emptyItems: 0, opaqueObjects: 0, noTypeNodes: 0, examples: [] };
   const note = (p: Path): void => {
     if (st.examples.length < 5) st.examples.push(pointer([...SCHEMA_ROOT, ...p]));
   };
-  for (const [p, n] of schemaNodes(schema)) {
+  for (const [p, n] of schemaNodes(schema, [], w)) {
     if (p.length === 0) continue;
     const items = n['items'];
     if (isObj(items) && Object.keys(items).length === 0) {
@@ -403,7 +423,7 @@ function annotationFindings(tool: CatalogTool): Finding[] {
 /* structural validity                                                */
 /* ------------------------------------------------------------------ */
 
-function validityFindings(tool: CatalogTool): Finding[] {
+function validityFindings(tool: CatalogTool, w: WalkOptions): Finding[] {
   const out: Finding[] = [];
   const schema = tool.inputSchema as unknown;
   if (!isObj(schema)) {
@@ -413,7 +433,7 @@ function validityFindings(tool: CatalogTool): Finding[] {
   if (schema['type'] !== 'object') {
     out.push(finding('schema-invalid', tool.name, [...SCHEMA_ROOT, 'type'], `root type is ${JSON.stringify(schema['type'] ?? null)}; MCP requires "object"`));
   }
-  for (const [p, n] of schemaNodes(schema)) {
+  for (const [p, n] of schemaNodes(schema, [], w)) {
     for (const problem of keywordProblems(n, schema)) out.push(finding('schema-invalid', tool.name, [...SCHEMA_ROOT, ...p], problem));
 
     const req = n['required'];
@@ -442,8 +462,13 @@ function validityFindings(tool: CatalogTool): Finding[] {
 
     if ('default' in n) {
       const { default: dv, ...rest } = n;
-      const reason = validateValue(dv, rest, schema);
-      if (reason) out.push(finding('default-invalid', tool.name, [...SCHEMA_ROOT, ...p, 'default'], reason));
+      const ctx = validateContext();
+      const reason = validateValue(dv, rest, schema, ctx);
+      w.work?.spend(ctx.steps + Math.ceil(ctx.bytes / 1024));
+      const at = [...SCHEMA_ROOT, ...p, 'default'];
+      if (reason) out.push(finding('default-invalid', tool.name, at, reason));
+      else if (ctx.exhausted) out.push(finding('default-unchecked', tool.name, at, 'not fully checked: validation budget exhausted (steps or bytes: $ref fan-out, large enums or values, depth)'));
+      else if (ctx.skippedPattern) out.push(finding('default-unchecked', tool.name, at, 'not checked against `pattern`: regexes from schemas are never executed'));
     }
   }
   return out;
@@ -455,41 +480,44 @@ function validityFindings(tool: CatalogTool): Finding[] {
 
 const MIN_ESCAPED_JSON_BYTES = 40;
 
-function escapedJsonFindings(tool: CatalogTool): Finding[] {
-  const out: Finding[] = [];
-  for (const [p, s] of allStrings(tool)) {
-    if (s.length > ANALYZE_MAX_CHARS) continue;
-    const t = s.trim();
-    if (t.length < MIN_ESCAPED_JSON_BYTES || !(t.startsWith('{') || t.startsWith('['))) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(t);
-    } catch {
-      continue;
-    }
-    if (parsed === null || typeof parsed !== 'object') continue;
-    const overhead = utf8Bytes(JSON.stringify(s)) - 2 - utf8Bytes(s);
-    if (overhead <= 0) continue;
-    out.push(
-      finding('escaped-json', tool.name, p, `string holds a JSON ${Array.isArray(parsed) ? 'array' : 'object'}; escaping adds ${overhead} bytes`, {
-        bytes: utf8Bytes(s),
-        overheadBytes: overhead,
-      }),
-    );
-  }
-  return out;
-}
-
 /* ------------------------------------------------------------------ */
 /* untrusted description size                                         */
 /* ------------------------------------------------------------------ */
 
-function descriptionSizeFindings(tool: CatalogTool, cap: number): Finding[] {
+/** One pass over every string in the entry: escaped JSON documents and oversize descriptions. */
+function stringFindings(tool: CatalogTool, cap: number, w: WalkOptions): Finding[] {
   const out: Finding[] = [];
-  for (const [p, s] of allStrings(tool)) {
-    if (p[p.length - 1] !== 'description') continue;
-    const bytes = utf8Bytes(s);
-    if (bytes > cap) out.push(finding('description-oversize', tool.name, p, `description is ${bytes} bytes (cap ${cap})`, { bytes, cap }));
+  const check = (parent: Path, key: string | number, s: string): void => {
+    if (key === 'description') {
+      const bytes = utf8Bytes(s);
+      if (bytes > cap) out.push(finding('description-oversize', tool.name, [...parent, key], `description is ${bytes} bytes (cap ${cap})`, { bytes, cap }));
+    }
+    if (s.length < MIN_ESCAPED_JSON_BYTES || s.length > ANALYZE_MAX_CHARS) return;
+    const t = s.trim();
+    if (!(t.startsWith('{') || t.startsWith('['))) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(t);
+    } catch {
+      return;
+    }
+    if (parsed === null || typeof parsed !== 'object') return;
+    const overhead = utf8Bytes(JSON.stringify(s)) - 2 - utf8Bytes(s);
+    if (overhead <= 0) return;
+    out.push(
+      finding('escaped-json', tool.name, [...parent, key], `string holds a JSON ${Array.isArray(parsed) ? 'array' : 'object'}; escaping adds ${overhead} bytes`, {
+        bytes: utf8Bytes(s),
+        overheadBytes: overhead,
+      }),
+    );
+  };
+  // why: inspect direct string children per container and build a path only on a hit (enum lists can hold a million strings)
+  for (const [p, n] of allSubtrees(tool, [], w)) {
+    if (Array.isArray(n)) {
+      for (let i = 0; i < n.length; i++) if (typeof n[i] === 'string') check(p, i, n[i] as string);
+    } else {
+      for (const [k, v] of Object.entries(n)) if (typeof v === 'string') check(p, k, v);
+    }
   }
   return out;
 }
@@ -503,10 +531,25 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
   const minBytes = opts.subtreeMinBytes ?? DEFAULTS.subtreeMinBytes;
   const schema = tool.inputSchema as unknown;
   const findings: Finding[] = [];
+  const tooDeep = new Set<string>();
+  const work = new WorkBudget(opts.workBudget ?? DEFAULTS.workBudget);
+  const ws: WalkOptions = { work, onTooDeep: (p) => tooDeep.add(pointer([...SCHEMA_ROOT, ...p])) };
+  const wt: WalkOptions = { work, onTooDeep: (p) => tooDeep.add(pointer(p)) };
+  let lists: ChoiceList[] = [];
+  let duplicates: DuplicateStats = {
+    wasteBytes: 0,
+    share: 0,
+    groups: 0,
+    maxRepeat: 0,
+    top: [],
+    defs: { created: 0, bytesBefore: 0, bytesAfter: 0, tokensBefore: null, tokensAfter: null },
+  };
+  let untyped: UntypedStats = { emptyItems: 0, opaqueObjects: 0, noTypeNodes: 0, examples: [] };
 
-  findings.push(...validityFindings(tool));
+  try {
+  findings.push(...validityFindings(tool, ws));
 
-  const lists = isObj(schema) ? choiceLists(schema) : [];
+  lists = isObj(schema) ? choiceLists(schema, ws) : [];
   for (const c of lists) {
     if (c.kind !== 'drf-description' && c.count > enumMax) {
       findings.push(finding('enum-large', tool.name, c.path, `${c.kind} with ${c.count} values (cap ${enumMax})`, { count: c.count, bytes: c.bytes }));
@@ -520,7 +563,10 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
     }
   }
 
-  const duplicates = duplicateStats(isObj(schema) ? schema : undefined, minBytes, opts.tokenizer);
+  // why: duplicate accounting canonicalizes every subtree, O(size × depth); an absurdly deep schema is reported, not ground through.
+  const tooDeepForDup = isObj(schema) && exceedsDepth(schema, MAX_WALK_DEPTH);
+  if (tooDeepForDup) tooDeep.add(pointer(SCHEMA_ROOT));
+  else duplicates = duplicateStats(isObj(schema) ? schema : undefined, minBytes, opts.tokenizer, ws);
   if (duplicates.groups > 0) {
     const pct = Math.round(duplicates.share * 1000) / 10;
     const d = duplicates.defs;
@@ -543,7 +589,7 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
     );
   }
 
-  const untyped = untypedStats(isObj(schema) ? schema : undefined);
+  untyped = untypedStats(isObj(schema) ? schema : undefined, ws);
   const nUntyped = untyped.emptyItems + untyped.opaqueObjects + untyped.noTypeNodes;
   if (nUntyped > 0) {
     findings.push(
@@ -557,8 +603,22 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
     );
   }
 
-  findings.push(...escapedJsonFindings(tool));
-  findings.push(...descriptionSizeFindings(tool, opts.maxDescriptionBytes ?? DEFAULTS.maxDescriptionBytes));
+  findings.push(...stringFindings(tool, opts.maxDescriptionBytes ?? DEFAULTS.maxDescriptionBytes, wt));
+  } catch (err) {
+    if (!(err instanceof WorkBudgetExceeded)) throw err;
+    findings.push(
+      finding('analysis-budget-exceeded', tool.name, SCHEMA_ROOT, `analysis stopped after ${err.limit} work units; findings for this tool are partial`, { workBudget: err.limit }),
+    );
+  }
+  if (tooDeep.size > 0) {
+    const at = [...tooDeep].sort();
+    findings.push(
+      finding('schema-too-deep', tool.name, at[0]!, `nesting deeper than ${MAX_WALK_DEPTH} levels at ${at.length} point(s); deeper nodes were not analyzed`, {
+        maxDepth: MAX_WALK_DEPTH,
+        points: at.length,
+      }),
+    );
+  }
   findings.push(...annotationFindings(tool));
 
   if (tool.outputSchema !== undefined) {

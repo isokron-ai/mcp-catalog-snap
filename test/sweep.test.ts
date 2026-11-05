@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import { loadSweepInput, parseToolsListFile } from '../src/adapters/index.js';
-import { bearerToken, parseArgs, redact, targetFromArgs, targetSecrets } from '../src/args.js';
+import { bearerToken, parseArgs, targetFromArgs } from '../src/args.js';
+import { redact, targetSecrets } from '../src/redact.js';
 import { fingerprint } from '../src/canonical.js';
 import { EXIT_BUDGET, cmdSweep } from '../src/cmd-sweep.js';
 import { mdCode, mdText, renderSweepMarkdown } from '../src/report-md.js';
@@ -104,7 +105,7 @@ describe('runSweep', () => {
 
 describe('markdown', () => {
   it('escapes hostile server text so it cannot break tables, links or HTML', async () => {
-    expect(mdText('a|b\n<script>[x](http://e)`')).toBe('a\\|b \\<script\\>\\[x\\](http://e)\\`');
+    expect(mdText('a|b\n<script>[x](http://e)`')).toBe('a\\|b \\<script\\>\\[x\\](http:\u2060//e)\\`');
     expect(mdCode('x`y|z\nw')).toBe('`x y\\|z w`');
     expect(mdText('y'.repeat(500)).length).toBeLessThanOrEqual(120);
     const toks = await loadTokenizers(['cl100k']);

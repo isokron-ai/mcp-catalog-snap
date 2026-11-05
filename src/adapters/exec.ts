@@ -144,20 +144,20 @@ export function sweepInputFromExecRecords(
   meta: Pick<SweepInput, 'server' | 'protocolVersion' | 'source'> & { adapter: string; wrapperTools?: CatalogTool[] | null; marker?: string; notes?: string[] },
 ): SweepInput {
   const marker = meta.marker ?? POSTHOG_EXEC.infoSchemaMarker!;
-  const exposure: SweepInput['exposure'] = {};
-  const views: SweepInput['views'] = {};
-  const embeddedSchemas: SweepInput['embeddedSchemas'] = {};
+  const exposure: SweepInput['exposure'] = new Map();
+  const views: SweepInput['views'] = new Map();
+  const embeddedSchemas: SweepInput['embeddedSchemas'] = new Map();
   const findings: Finding[] = [];
   const tools: CatalogTool[] = [];
   for (const r of records) {
     const contract = contractOf(r);
     tools.push(contract);
-    exposure[r.name] = r.info_output;
-    const v: Record<string, string> = {};
-    if (r.full_info_output !== undefined) v['infoFull'] = r.full_info_output;
-    if (r.info_json_output !== undefined) v['infoJson'] = r.info_json_output;
-    if (r.schema_output !== undefined) v['schema'] = r.schema_output;
-    views[r.name] = v;
+    exposure.set(r.name, r.info_output);
+    const v = new Map<string, string>();
+    if (r.full_info_output !== undefined) v.set('infoFull', r.full_info_output);
+    if (r.info_json_output !== undefined) v.set('infoJson', r.info_json_output);
+    if (r.schema_output !== undefined) v.set('schema', r.schema_output);
+    views.set(r.name, v);
 
     const at = r.info_output.lastIndexOf(marker);
     const plain =
@@ -166,7 +166,7 @@ export function sweepInputFromExecRecords(
         const j = parseJson(r.info_json_output);
         return isObj(j) && j['inputSchema'] !== undefined ? JSON.stringify(j['inputSchema']) : undefined;
       })();
-    if (at >= 0 && plain !== undefined) embeddedSchemas[r.name] = { escaped: r.info_output.slice(at + marker.length), plain };
+    if (at >= 0 && plain !== undefined) embeddedSchemas.set(r.name, { escaped: r.info_output.slice(at + marker.length), plain });
 
     const unknown = countUnknownTypes(parseJson(r.schema_output));
     if (unknown > 0) {
@@ -224,6 +224,12 @@ function render(template: string, name: string): string {
   return template.split('{name}').join(name);
 }
 
+/** The wrapper answered with `isError`: the server rejected the command (e.g. an unknown name). */
+class ExecRejected extends Error {}
+
+/** Names that may be interpolated into a command string: no spaces, quotes, separators or control characters. */
+export const EXEC_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
 function resultText(r: unknown): string {
   const o = isObj(r) ? r : {};
   const blocks = Array.isArray(o['content']) ? o['content'] : [];
@@ -231,7 +237,7 @@ function resultText(r: unknown): string {
     .filter((b): b is { type: 'text'; text: string } => isObj(b) && b['type'] === 'text' && typeof b['text'] === 'string')
     .map((b) => b.text)
     .join('\n');
-  if (o['isError'] === true) throw new Error(text.slice(0, 300) || 'tool returned isError');
+  if (o['isError'] === true) throw new ExecRejected(text.slice(0, 300) || 'tool returned isError');
   return text;
 }
 
@@ -275,9 +281,12 @@ export async function sweepInputFromExecSession(
     });
     return resultText(r);
   };
-  const names = parseToolNames(await run(p.list));
+  const listedNames = parseToolNames(await run(p.list));
+  const invalid = listedNames.filter((n) => !EXEC_NAME.test(n));
+  const names = listedNames.filter((n) => EXEC_NAME.test(n));
   const records: ExecRecord[] = [];
   const rejected: string[] = [];
+  const failed: { name: string; message: string }[] = [];
   const queue = [...names];
   await Promise.all(
     Array.from({ length: Math.max(1, opts.concurrency ?? 4) }, async () => {
@@ -286,8 +295,9 @@ export async function sweepInputFromExecSession(
           const r: ExecRecord = { name, info_output: await run(render(p.info, name)), info_json_output: await run(render(p.infoJson, name)) };
           if (p.schema) r.schema_output = await run(render(p.schema, name));
           records.push(r);
-        } catch {
-          rejected.push(name);
+        } catch (err) {
+          if (err instanceof ExecRejected) rejected.push(name);
+          else failed.push({ name, message: ((err as Error).message || 'error').slice(0, 200) });
         }
       }
     }),
@@ -296,7 +306,13 @@ export async function sweepInputFromExecSession(
   const notes = [
     `live exec sweep via "${p.tool}" (${records.length} tools); contracts come from \`${p.infoJson}\`, which the server may summarize for large tools`,
   ];
-  if (rejected.length > 0) notes.push(`${rejected.length} listed name(s) were rejected by \`info\` and skipped: ${rejected.sort().slice(0, 10).join(', ')}`);
+  if (invalid.length > 0) notes.push(`${invalid.length} listed name(s) have characters outside [A-Za-z0-9._:-] and were not sent`);
+  if (rejected.length > 0) notes.push(`${rejected.length} listed name(s) were rejected by \`info\` (isError): ${rejected.sort().slice(0, 10).join(', ')}`);
+  if (failed.length > 0) {
+    failed.sort((a, b) => (a.name < b.name ? -1 : 1));
+    notes.push(`${failed.length} tool(s) failed with a transport or timeout error: ${failed.slice(0, 5).map((f) => `${f.name} (${f.message})`).join(', ')}`);
+    if (records.length === 0) throw new Error(`every exec call failed; first: ${failed[0]!.name}: ${failed[0]!.message}`);
+  }
   const server: SweepInput['server'] = { name: opts.nameOverride ?? session.server.name, version: session.server.version || null };
   if (session.server.title !== undefined) server.title = session.server.title;
   const meta: Parameters<typeof sweepInputFromExecRecords>[1] = {

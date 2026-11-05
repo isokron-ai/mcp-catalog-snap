@@ -21,12 +21,35 @@ import type { SourceInfo, SweepInput } from './types.js';
 export const TOOLS_LIST_ADAPTER = 'tools-list';
 const EXPOSURE_LABEL = 'canonical JSON (RFC 8785) of each tools/list entry';
 
-/** Source description without credentials: URL origin + path only, stdio command basename only. */
+/**
+ * A path segment that looks like a credential (some servers put API keys
+ * in the URL path): 16+ chars mixing letters and digits, or long hex.
+ */
+function looksSecret(seg: string): boolean {
+  const s = decodeSafe(seg);
+  if (s.length < 16) return false;
+  if (/^[0-9a-f]{16,}$/i.test(s)) return true;
+  return /[A-Za-z]/.test(s) && /\d/.test(s) && /^[A-Za-z0-9_\-.~+=]+$/.test(s);
+}
+
+function decodeSafe(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** Source description without credentials: URL origin + path (credential-looking segments masked), stdio command basename only. */
 export function sourceOf(target: Target): SourceInfo {
   if (target.kind === 'stdio') return { kind: 'stdio', command: basename(target.command) };
   try {
     const u = new URL(target.url);
-    return { kind: 'http', url: `${u.origin}${u.pathname}` };
+    const path = u.pathname
+      .split('/')
+      .map((seg) => (looksSecret(seg) ? '***' : seg))
+      .join('/');
+    return { kind: 'http', url: `${u.origin}${path}` };
   } catch {
     return { kind: 'http', url: '<invalid url>' };
   }
@@ -37,7 +60,7 @@ function asObject(v: unknown): Record<string, unknown> | null {
 }
 
 function emptyInput(): Pick<SweepInput, 'exposure' | 'views' | 'embeddedSchemas' | 'wrapperTools' | 'findings' | 'notes'> {
-  return { exposure: {}, views: {}, embeddedSchemas: {}, wrapperTools: null, findings: [], notes: [] };
+  return { exposure: new Map(), views: new Map(), embeddedSchemas: new Map(), wrapperTools: null, findings: [], notes: [] };
 }
 
 /** Parse a saved catalog file. `fileName` names the source in the report (no directory). */

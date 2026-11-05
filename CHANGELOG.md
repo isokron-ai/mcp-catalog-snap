@@ -18,8 +18,48 @@ uses semantic versioning once past 0.x.
   **exit 4** when exceeded (exits 0–3 unchanged). Also `--tokenizers`,
   `--budget-tokenizer`, `--enum-max`, `--max-description-bytes`,
   `--anthropic` (opt-in), `--call-results`, `--save-raw`, `--top`.
-- `--bearer-file FILE` / `--bearer-env VAR` for every `--url` command. The
-  token is never printed or written; error text is redacted.
+- `--bearer-file FILE` / `--bearer-env VAR` for every `--url` command (an
+  error for stdio and config targets, which take `--env` / `headers`).
+  Credentials are scrubbed from the report and diff *models* before any
+  renderer formats them, and again at the output layer for everything any
+  command prints or writes (stdout, stderr, `--report`, `--md`), matching
+  raw, markdown-escaped, JSON-pointer-escaped, JSON-escaped, percent-encoded
+  and base64/base64url forms, and masking a 6+ character fragment of a
+  secret at any `…` cut. A catalog that embeds the request's credential is
+  refused rather than written to a snapshot, `check --update` or
+  `--save-raw`. Credential headers shorter than 8 characters are refused
+  (they cannot be scrubbed without masking ordinary text). Credential-looking
+  URL path segments are masked in report sources.
+
+### Changed
+
+- Tokenizer backend is `gpt-tokenizer` (same cl100k/o200k counts, verified
+  against Python tiktoken; linear on hostile input) instead of
+  `js-tiktoken`, whose BPE took minutes on one long word. Texts over 2,048
+  units are counted in chunks cut only at pre-tokenizer piece boundaries (a
+  long boundary-free word stays whole), so counts are exact, never
+  approximate; adversarial long runs of letters, digits and hex,
+  contractions at chunk edges and combining marks are oracle fixtures.
+- Canonical JSON, key sorting, pretty printing and the diff are iterative:
+  any nesting depth works, and `__proto__` / `constructor` keys stay data.
+  Output is byte-identical to v0.1 for every catalog v0.1 could handle
+  (`canonicalize` is now only a test oracle). A tool or property named
+  after an `Object.prototype` member no longer crashes anything.
+
+### Security
+
+- Schemas are untrusted: `pattern` is never executed (a default whose check
+  needs one is reported as `default-unchecked`), default validation has a
+  step budget (one step per comparison) and a byte budget (each value
+  serialized once, enum membership via a set built once per enum), `$ref`
+  results are memoized per (target, value) behind a cycle guard, malformed `$ref` encodings are findings, walks
+  stop at 64 levels (`schema-too-deep`), and each tool's analysis has a
+  deterministic work budget (`analysis-budget-exceeded`) instead of a wall
+  clock, so reports stay byte-identical.
+- Exec adapters only send names matching `[A-Za-z0-9._:-]`, and report
+  rejected names (`isError`) separately from transport or timeout failures.
+- Markdown output escapes server text (including `&`, so entities cannot
+  spell a mention, link or tag) and breaks autolinks and @-mentions.
 - `runSweep`, `serializeReport`, `renderSweepMarkdown`, `cmdSweep`,
   `EXIT_BUDGET` in the programmatic API.
 
@@ -30,8 +70,8 @@ uses semantic versioning once past 0.x.
   `{inputSchema, outputSchema}`), so a wording edit does not move it;
   `descriptionFingerprint` hashes the description separately so wording
   drift is visible on its own; `entryFingerprint` covers every field.
-- Pluggable tokenizers: `cl100k` (tiktoken cl100k_base via `js-tiktoken`,
-  the reference scale), `o200k`, the `chars4` heuristic, and
+- Pluggable tokenizers: `cl100k` (tiktoken cl100k_base, the reference
+  scale), `o200k`, the `chars4` heuristic, and
   `registerTokenizer` for your own. Every count carries its tokenizer label.
 - `orderedToolsFingerprint`: sha256 over the tools array in server order,
   identical to IsoKron ADR-0005's `hashMcpToolDefinitions`. The catalog
@@ -47,8 +87,9 @@ uses semantic versioning once past 0.x.
   ``* `x` - x`` lists), `duplicate-subtree` (repeated bytes, % of schema,
   top offenders, `$defs/$ref` rewrite estimate), `escaped-json`,
   `untyped-node`, `description-oversize` (descriptions are treated as
-  untrusted text: size-capped, never executed; regexes from schemas run only
-  when they cannot backtrack catastrophically), `oversize-tool`, `annotations-missing`,
+  untrusted text: size-capped, never executed), `oversize-tool`,
+  `oversize-catalog`, `default-unchecked`, `schema-too-deep`,
+  `analysis-budget-exceeded`, `annotations-missing`,
   `annotation-contradiction` (e.g. a `delete` tool with
   `destructiveHint: false`), `output-duplication-risk` and, for observed
   call results, `structured-content-duplicated`.
@@ -62,10 +103,12 @@ uses semantic versioning once past 0.x.
   an offline, byte-identical re-run. `ExecProfile` describes other
   exec-style servers. Report sources never carry credentials (URL origin and
   path only; stdio command basename only).
-- Reproduces the first PostHog audit exactly from its saved dump: 1,193
-  tools, 933,010 cl100k tokens of `info` output over the full catalog,
-  1,290,802 unsummarized, 249,001 `schema`, 210,494 descriptions, escaped vs
-  plain schema 660,351 vs 606,160 (opt-in test: `MCS_POSTHOG_RAW=…`).
+- On the first PostHog audit's saved dump (not committed; opt-in test
+  `MCS_POSTHOG_RAW=…`) the totals match the audit: 1,193 tools, 933,010
+  cl100k tokens of `info` output over the full catalog, 1,290,802
+  unsummarized, 249,001 `schema`, 210,494 descriptions, escaped vs plain
+  schema 660,351 vs 606,160. What CI checks is tokenizer parity with Python
+  tiktoken on committed fixtures (cl100k and o200k oracle values).
 
 ## [0.1.1] — 2026-11-01
 

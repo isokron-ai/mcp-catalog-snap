@@ -30,12 +30,12 @@ export interface SweepInput {
   orderedTools: unknown[] | null;
   /** What `exposure` means, carried into the report. */
   exposureLabel: string;
-  /** Per tool: the primary text the model is shown for it. Missing → JCS of the entry. */
-  exposure: Record<string, string>;
+  /** Per tool: the primary text the model is shown for it. Missing → JCS of the entry. Maps, never objects: tool names are untrusted keys. */
+  exposure: Map<string, string>;
   /** Per tool: further named views (e.g. exec `schema` output). */
-  views: Record<string, Record<string, string>>;
+  views: Map<string, Map<string, string>>;
   /** Per tool: a schema carried as an escaped string inside text, and the same schema as plain JSON. */
-  embeddedSchemas: Record<string, { escaped: string; plain: string }>;
+  embeddedSchemas: Map<string, { escaped: string; plain: string }>;
   /** The tools/list the client actually loads, when it differs from `catalog` (exec mode). */
   wrapperTools: CatalogTool[] | null;
   /** Adapter-specific findings (they need no tokenizer). */
