@@ -100,40 +100,96 @@ function typeMatches(v: unknown, t: string): boolean {
   return actual === t || (t === 'number' && actual === 'integer');
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
-  try {
-    return canonicalJson(a) === canonicalJson(b); // iterative: safe on deep values
-  } catch {
-    return false;
-  }
-}
-
-/** Shared state for one `validateValue` run. */
+/** Shared state for one tool's `validateValue` runs. */
 export interface ValidateContext {
   steps: number;
   limit: number;
+  /** Bytes serialized for comparisons (charged as work, capped by byteLimit). */
+  bytes: number;
+  byteLimit: number;
   /** A check needed a `pattern`, which is never executed. */
   skippedPattern: boolean;
-  /** The step budget ran out; the result is "unknown", not "valid". */
+  /** The step or byte budget ran out; the result is "unknown", not "valid". */
   exhausted: boolean;
-  /** $ref targets currently being expanded, per value (cycle guard). */
-  active: Map<unknown, Set<unknown>>;
+  /** $ref targets currently being expanded, per value key (cycle guard). */
+  active: Map<string, Set<unknown>>;
+  /** Comparison key per object value (each value is serialized once). */
+  keys: WeakMap<object, string>;
+  /** Membership sets per enum array (built once per array). */
+  enumSets: WeakMap<unknown[], Set<string>>;
+  /** Result per ($ref target, value key). */
+  refMemo: Map<unknown, Map<string, string | null>>;
 }
 
-export function validateContext(limit = 10_000): ValidateContext {
-  return { steps: 0, limit, skippedPattern: false, exhausted: false, active: new Map() };
+export function validateContext(limit = 10_000, byteLimit = 4 * 1024 * 1024): ValidateContext {
+  return {
+    steps: 0,
+    limit,
+    bytes: 0,
+    byteLimit,
+    skippedPattern: false,
+    exhausted: false,
+    active: new Map(),
+    keys: new WeakMap(),
+    enumSets: new WeakMap(),
+    refMemo: new Map(),
+  };
+}
+
+function step(ctx: ValidateContext, n = 1): boolean {
+  ctx.steps += n;
+  if (ctx.steps > ctx.limit || ctx.bytes > ctx.byteLimit) ctx.exhausted = true;
+  return !ctx.exhausted;
 }
 
 /**
- * First reason `value` fails `schema`, or null when it passes, when the
- * schema uses only keywords this checker does not evaluate, or when the
- * budget ran out (check `ctx.exhausted` / `ctx.skippedPattern`).
+ * Type-tagged canonical key: equal keys ⇔ JSON-equal values. Objects are
+ * serialized once per context (memoized by identity) and their bytes are
+ * charged; primitives are cheap except long strings, which are charged too.
  */
+function keyOf(v: unknown, ctx: ValidateContext): string | null {
+  if (v === null || typeof v !== 'object') {
+    if (typeof v === 'string') ctx.bytes += v.length;
+    return `${typeof v}:${typeof v === 'string' ? v : JSON.stringify(v)}`;
+  }
+  const memo = ctx.keys.get(v);
+  if (memo !== undefined) return memo;
+  if (ctx.bytes > ctx.byteLimit) return null;
+  let k: string;
+  try {
+    k = `o:${canonicalJson(v)}`;
+  } catch {
+    return null;
+  }
+  ctx.bytes += k.length;
+  ctx.keys.set(v, k);
+  return k;
+}
+
+/** Is `value` JSON-equal to one of `list`? null when the budget ran out first. */
+function inList(list: unknown[], value: unknown, ctx: ValidateContext): boolean | null {
+  let set = ctx.enumSets.get(list);
+  if (!set) {
+    if (!step(ctx, list.length)) return null;
+    set = new Set();
+    for (const e of list) {
+      const k = keyOf(e, ctx);
+      if (k === null || ctx.bytes > ctx.byteLimit) {
+        ctx.exhausted = true;
+        return null;
+      }
+      set.add(k);
+    }
+    ctx.enumSets.set(list, set);
+  }
+  const k = keyOf(value, ctx);
+  if (k === null || !step(ctx)) return null;
+  return set.has(k);
+}
+
 export function validateValue(value: unknown, schema: unknown, root: unknown, ctx: ValidateContext = validateContext(), depth = 0): string | null {
   if (ctx.exhausted) return null;
-  if (++ctx.steps > ctx.limit || depth > 32) {
+  if (!step(ctx) || depth > 32) {
     ctx.exhausted = true;
     return null;
   }
@@ -142,15 +198,26 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, ct
   if (!isObj(schema)) return null;
   if (typeof schema['$ref'] === 'string') {
     const target = resolveLocalRef(root, schema['$ref']);
-    if (target !== undefined) {
-      let seen = ctx.active.get(value);
-      if (!seen) ctx.active.set(value, (seen = new Set()));
-      if (!seen.has(target)) {
-        seen.add(target);
-        const r = validateValue(value, target, root, ctx, depth + 1);
-        seen.delete(target);
-        if (r) return r;
+    const vk = target === undefined ? null : keyOf(value, ctx);
+    if (target !== undefined && vk !== null) {
+      let memo = ctx.refMemo.get(target);
+      if (!memo) ctx.refMemo.set(target, (memo = new Map()));
+      let r: string | null | undefined = memo.get(vk);
+      if (r === undefined) {
+        let seen = ctx.active.get(vk);
+        if (!seen) ctx.active.set(vk, (seen = new Set()));
+        if (seen.has(target)) r = null; // cycle: the outer expansion decides
+        else {
+          seen.add(target);
+          r = validateValue(value, target, root, ctx, depth + 1);
+          seen.delete(target);
+          if (!ctx.exhausted) memo.set(vk, r);
+        }
       }
+      if (r) return r;
+    } else if (target !== undefined) {
+      ctx.exhausted = true;
+      return null;
     }
   }
   if (value === null && schema['nullable'] === true) return null;
@@ -159,8 +226,16 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, ct
     const list = (Array.isArray(t) ? t : [t]).filter((x): x is string => typeof x === 'string' && TYPES.has(x));
     if (list.length > 0 && !list.some((x) => typeMatches(value, x))) return `${short(value)} is not of type ${list.join('|')}`;
   }
-  if (Array.isArray(schema['enum']) && !schema['enum'].some((e) => deepEqual(e, value))) return `${short(value)} is not one of the enum values`;
-  if (Object.hasOwn(schema, 'const') && !deepEqual(schema['const'], value)) return `${short(value)} is not the const ${short(schema['const'])}`;
+  if (Array.isArray(schema['enum'])) {
+    const hit = inList(schema['enum'], value, ctx);
+    if (hit === null) return null;
+    if (!hit) return `${short(value)} is not one of the enum values`;
+  }
+  if (Object.hasOwn(schema, 'const')) {
+    const hit = inList([schema['const']], value, ctx);
+    if (hit === null) return null;
+    if (!hit) return `${short(value)} is not the const ${short(schema['const'])}`;
+  }
   if (typeof value === 'number') {
     const n = (k: string): number | undefined => (typeof schema[k] === 'number' ? (schema[k] as number) : undefined);
     if (n('minimum') !== undefined && value < n('minimum')!) return `${value} is below minimum ${n('minimum')}`;
@@ -169,6 +244,7 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, ct
     if (n('exclusiveMaximum') !== undefined && value >= n('exclusiveMaximum')!) return `${value} is not below exclusiveMaximum ${n('exclusiveMaximum')}`;
   }
   if (typeof value === 'string') {
+    ctx.bytes += value.length;
     const len = [...value].length;
     if (typeof schema['minLength'] === 'number' && len < schema['minLength']) return `string shorter than minLength ${schema['minLength']}`;
     if (typeof schema['maxLength'] === 'number' && len > schema['maxLength']) return `string longer than maxLength ${schema['maxLength']}`;
@@ -222,9 +298,10 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, ct
 }
 
 function short(v: unknown): string {
+  if (typeof v === 'string' && v.length > 200) v = `${v.slice(0, 100)}…`;
   let s: string;
   try {
-    s = JSON.stringify(v) ?? String(v);
+    s = typeof v === 'object' && v !== null ? canonicalJson(v).slice(0, 200) : (JSON.stringify(v) ?? String(v));
   } catch {
     s = '<value>';
   }

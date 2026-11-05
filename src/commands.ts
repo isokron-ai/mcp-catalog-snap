@@ -29,7 +29,7 @@ import {
   type Snapshot,
 } from './snapshot.js';
 import { VERSION } from './version.js';
-import { assertNoSecrets, redactingIO, targetSecrets, writeText, type IO } from './redact.js';
+import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
 export const EXIT_OK = 0;
 export const EXIT_DRIFT = 1;
@@ -88,6 +88,7 @@ function resolveTargets(sel: TargetSelection): Resolved {
     );
   }
   const cfg = loadConfig(configPath);
+  for (const s of cfg.servers) assertCredentialLengths(s.target);
   let specs = cfg.servers;
   if (sel.server !== undefined) {
     specs = specs.filter((s) => s.name === sel.server);
@@ -133,7 +134,7 @@ export interface SnapshotOptions extends CommonOptions {
 }
 
 /** Wrap `io` so output and report files are scrubbed of every credential the resolved targets carry. */
-function scrubbed(io: IO, specs: ServerSpec[]): IO {
+function scrubbed(io: IO, specs: ServerSpec[]): IO & { variants: () => string[] } {
   return redactingIO(io, specs.flatMap((s) => targetSecrets(s.target)));
 }
 
@@ -212,8 +213,9 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       // Integrity first: a hand-edited baseline (e.g. tools emptied) would
       // otherwise be compared as if it were a real capture.
       const stored = readVerifiedSnapshot(path);
-      const diff = diffCatalogs(stored.catalog, live.catalog);
-      const verdict = evaluate(diff, policy);
+      // why: scrub the model before rendering, so no formatter (escaping, windows, pointers) sees a raw credential
+      const diff = scrubDeep(diffCatalogs(stored.catalog, live.catalog), io.variants());
+      const verdict = scrubDeep(evaluate(diff, policy), io.variants());
       results.push({
         server: name,
         ok: true,
@@ -257,7 +259,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
     tool: `mcp-catalog-snap/${VERSION}`,
     ok: !anyError && !anyDrift,
     policy: { ignoreDescriptions: policy.ignoreDescriptions ?? false, allowAdditions: policy.allowAdditions ?? false },
-    servers: results,
+    servers: scrubDeep(results, io.variants()),
   };
   if (opts.reportFile !== undefined) {
     try {

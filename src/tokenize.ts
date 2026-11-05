@@ -11,13 +11,13 @@
  *
  * BPE comes from `gpt-tokenizer`, whose merge loop is linear in practice:
  * a 64K-character single word counts in ~0.1 s (js-tiktoken, used before,
- * took minutes on such input). Tool text is untrusted, so work is bounded
- * twice more: texts over `TOKENIZE_CHUNK` units are counted in chunks of at
- * most that size, cut where the pre-tokenizer must end a piece anyway, so
- * the count stays exact. Only a window with no such point (a run of only
- * letters or only punctuation, which no real schema contains) is hard-cut,
- * and only that window is approximate. Counts match Python tiktoken; the
- * test suite checks fixtures against oracle values.
+ * took minutes on such input). Texts over `TOKENIZE_CHUNK` units are
+ * counted in chunks cut only where the pre-tokenizer must end a piece
+ * anyway; a long boundary-free word stays in one chunk. Counts are
+ * therefore exact, never approximate: the test suite checks them against
+ * Python tiktoken oracle values, including adversarial long runs of
+ * letters, digits and hex, contractions at chunk edges and combining
+ * marks.
  *
  * Special-token strings such as `<|endoftext|>` are counted as plain text
  * (tiktoken's `disallowed_special=()`), so a description that happens to
@@ -43,24 +43,35 @@ const LNM = /[\p{L}\p{N}\p{M}]/u;
 
 /**
  * True when cl100k/o200k pre-tokenization must end a piece at `i`: the
- * previous char is a letter or digit and the next is not a letter, digit,
- * combining mark or apostrophe (contractions). Pieces never span such a
- * point, so the two sides count the same separately as together.
+ * code point before `i` is a letter or digit and the one at `i` is not a
+ * letter, digit, combining mark or apostrophe (contractions). Pieces never
+ * span such a point, so the two sides count the same separately as
+ * together. Lone surrogates are neither letters nor digits.
  */
 function isPieceBoundary(text: string, i: number): boolean {
-  const next = text.codePointAt(i)!;
-  const nextCh = String.fromCodePoint(next);
-  if (nextCh === "'" || LNM.test(nextCh)) return false;
-  const prevCode = text.charCodeAt(i - 1);
-  if (prevCode >= 0xd800 && prevCode <= 0xdbff) return false; // never split a surrogate pair
-  const prev = prevCode >= 0xdc00 && prevCode <= 0xdfff ? text.slice(i - 2, i) : text[i - 1]!;
-  return LN.test(prev);
+  const nextCode = text.charCodeAt(i);
+  if (nextCode >= 0xdc00 && nextCode <= 0xdfff && i > 0) {
+    const before = text.charCodeAt(i - 1);
+    if (before >= 0xd800 && before <= 0xdbff) return false; // inside a surrogate pair
+  }
+  const next = String.fromCodePoint(text.codePointAt(i)!);
+  if (next === "'" || LNM.test(next)) return false;
+  const p1 = text.charCodeAt(i - 1);
+  let prev: string;
+  if (p1 >= 0xdc00 && p1 <= 0xdfff && i >= 2) {
+    const p0 = text.charCodeAt(i - 2);
+    prev = p0 >= 0xd800 && p0 <= 0xdbff ? text.slice(i - 2, i) : text[i - 1]!;
+  } else {
+    prev = text[i - 1]!;
+  }
+  return prev.length === 2 || !(p1 >= 0xd800 && p1 <= 0xdfff) ? LN.test(prev) : false;
 }
 
 /**
- * Split text into pieces of at most TOKENIZE_CHUNK units at the last piece
- * boundary of each window; a window without one is cut at its end (never
- * inside a surrogate pair).
+ * Split text into pieces of about TOKENIZE_CHUNK units, each cut at a
+ * piece boundary, so the summed count is exact. A stretch with no boundary
+ * (one long word) stays whole: gpt-tokenizer is linear on such input, so
+ * no hard cut is needed.
  */
 export function chunkText(text: string): string[] {
   if (text.length <= TOKENIZE_CHUNK) return [text];
@@ -70,17 +81,17 @@ export function chunkText(text: string): string[] {
     let end = Math.min(i + TOKENIZE_CHUNK, text.length);
     if (end < text.length) {
       let cut = -1;
-      for (let j = end; j > i + 1; j--) {
+      for (let j = end; j > i; j--) {
         if (isPieceBoundary(text, j)) {
           cut = j;
           break;
         }
       }
-      if (cut > 0) end = cut;
-      else {
-        const c = text.charCodeAt(end - 1);
-        if (c >= 0xd800 && c <= 0xdbff) end--;
+      if (cut < 0) for (let j = end + 1; j < text.length; j++) if (isPieceBoundary(text, j)) {
+        cut = j;
+        break;
       }
+      end = cut < 0 ? text.length : cut;
     }
     out.push(text.slice(i, end));
     i = end;

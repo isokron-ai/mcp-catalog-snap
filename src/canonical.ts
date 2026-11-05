@@ -181,3 +181,40 @@ export function prettyCanonical(value: unknown): string {
   }
   return `${out.join('')}\n`;
 }
+
+/**
+ * Canonical JSON per subtree, each built once from its children's strings
+ * (iterative post-order, memoized by object identity). Serializing every
+ * subtree of a tree then costs one pass plus the concatenation, instead of
+ * re-serializing each subtree from scratch. Only valid while the values are
+ * not mutated: use a fresh cache after changing the tree.
+ */
+export class CanonCache {
+  private readonly memo = new WeakMap<object, string>();
+
+  get(value: unknown): string {
+    if (value === null || typeof value !== 'object') return value === undefined ? 'null' : primitive(value);
+    const hit = this.memo.get(value);
+    if (hit !== undefined) return hit;
+    const stack: [object, boolean][] = [[value, false]];
+    while (stack.length > 0) {
+      const [node, expanded] = stack.pop()!;
+      if (this.memo.has(node)) continue;
+      const kids: unknown[] = Array.isArray(node) ? node : definedEntries(node as Record<string, unknown>).map(([, v]) => v);
+      if (!expanded) {
+        stack.push([node, true]);
+        for (const k of kids) if (k !== null && typeof k === 'object' && !this.memo.has(k)) stack.push([k, false]);
+        continue;
+      }
+      const part = (v: unknown): string =>
+        v === undefined || typeof v === 'symbol' ? 'null' : v !== null && typeof v === 'object' ? this.memo.get(v)! : primitive(v);
+      const s = Array.isArray(node)
+        ? `[${node.map(part).join(',')}]`
+        : `{${definedEntries(node as Record<string, unknown>)
+            .map(([k, v]) => `${JSON.stringify(k)}:${part(v)}`)
+            .join(',')}}`;
+      this.memo.set(node, s);
+    }
+    return this.memo.get(value)!;
+  }
+}

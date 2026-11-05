@@ -95,8 +95,14 @@ export function schemaNodes(node: unknown, path: Path = [], opts: WalkOptions = 
 }
 
 function subtreeChildren(n: Obj | unknown[], p: Path): [Path, unknown][] {
-  if (Array.isArray(n)) return n.map((v, i) => [[...p, i], v] as [Path, unknown]);
-  return Object.entries(n).map(([k, v]) => [[...p, k], v] as [Path, unknown]);
+  // why: only containers are walked; building a path for each of a million enum strings dominated big schemas
+  const out: [Path, unknown][] = [];
+  if (Array.isArray(n)) {
+    for (let i = 0; i < n.length; i++) if (n[i] !== null && typeof n[i] === 'object') out.push([[...p, i], n[i]]);
+  } else {
+    for (const [k, v] of Object.entries(n)) if (v !== null && typeof v === 'object') out.push([[...p, k], v]);
+  }
+  return out;
 }
 
 /** Every object/array subtree (data positions included), depth-first. */

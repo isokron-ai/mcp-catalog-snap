@@ -16,10 +16,10 @@ import { loadSweepInput, type LoadOptions } from './adapters/index.js';
 import { ANTHROPIC_API_KEY_ENV, DEFAULT_ANTHROPIC_MODEL, anthropicToolCounts } from './anthropic.js';
 import type { Target } from './capture.js';
 import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED } from './commands.js';
-import { redactingIO, targetSecrets, writeText, type IO } from './redact.js';
+import { redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 import { renderSweepMarkdown } from './report-md.js';
 import { SnapshotIntegrityError } from './snapshot.js';
-import { runSweep, serializeReport, type SweepOptions } from './sweep.js';
+import { runSweep, serializeReport, type SweepOptions, type SweepReport } from './sweep.js';
 import { REFERENCE_TOKENIZER, loadTokenizers } from './tokenize.js';
 
 export const EXIT_BUDGET = 4;
@@ -68,6 +68,16 @@ function readCallResults(path: string): { tool: string; result: unknown }[] {
   return out;
 }
 
+/**
+ * Scrub the report model, then render it. Order matters: renderers escape
+ * and truncate, which would hide a credential from a scrubber that ran
+ * afterwards (the output-layer scrubber stays as a second line of defense).
+ */
+export function sweepOutputs(raw: SweepReport, variants: readonly string[], top?: number): { report: SweepReport; json: string; md: string } {
+  const report = scrubDeep(raw, variants);
+  return { report, json: serializeReport(report), md: renderSweepMarkdown(report, top !== undefined ? { top } : {}) };
+}
+
 export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<number> {
   const secrets = targetSecrets(opts.target);
   const io = redactingIO(rawIo, secrets);
@@ -109,10 +119,7 @@ export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<nu
       }
     }
 
-    const report = runSweep(input, sweepOpts);
-    const json = serializeReport(report);
-    const mdOpts = opts.top !== undefined ? { top: opts.top } : {};
-    const md = renderSweepMarkdown(report, mdOpts);
+    const { report, json, md } = sweepOutputs(runSweep(input, sweepOpts), io.variants(), opts.top);
     if (opts.reportFile !== undefined) writeText(io, opts.reportFile, json);
     if (opts.mdFile !== undefined) writeText(io, opts.mdFile, md);
     io.out((opts.json ? json : md).trimEnd());

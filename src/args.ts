@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 
 import type { Target } from './capture.js';
+import { assertCredentialLengths } from './redact.js';
 
 export interface ParsedArgs {
   cmd: string;
@@ -142,6 +143,7 @@ export function targetFromArgs(args: ParsedArgs): Target | undefined {
     }
     const t: Target = { kind: 'http', url };
     if (Object.keys(headers).length > 0) t.headers = headers;
+    assertCredentialLengths(t);
     return t;
   }
   if (args.command.length > 0) {

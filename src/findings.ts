@@ -7,10 +7,9 @@
  * rename one only with a report-format bump.
  */
 
-import { canonicalJson, type JsonValue } from './canonical.js';
+import { CanonCache, canonicalJson, type JsonValue } from './canonical.js';
 import { measure } from './metrics.js';
 import {
-  allStrings,
   allSubtrees,
   isObj,
   MAX_WALK_DEPTH,
@@ -189,6 +188,7 @@ function enumValuesIn(node: unknown, depth = 0): Set<string> {
 }
 
 function choiceLists(schema: unknown, w: WalkOptions): ChoiceList[] {
+  const canon = new CanonCache();
   const out: (ChoiceList & { raw: Path })[] = [];
   for (const [p, n] of schemaNodes(schema, [], w)) {
     const c = choiceValues(n);
@@ -200,7 +200,7 @@ function choiceLists(schema: unknown, w: WalkOptions): ChoiceList[] {
         path: pointer([...SCHEMA_ROOT, ...p]),
         kind: c.kind,
         count: c.values.length,
-        bytes: utf8Bytes(canonicalJson(c.values)),
+        bytes: utf8Bytes(canon.get(c.values)),
         duplicated: drf.length > 0 && new Set(drf.filter((v) => sv.has(v))).size >= 0.8 * sv.size && overlap > 0,
         raw: p,
       });
@@ -235,9 +235,10 @@ function choiceLists(schema: unknown, w: WalkOptions): ChoiceList[] {
 /* ------------------------------------------------------------------ */
 
 function duplicateStats(schema: unknown, minBytes: number, tok: Tokenizer | undefined, w: WalkOptions): DuplicateStats {
-  const schemaText = schema === undefined ? '' : canonicalJson(schema);
+  const cache = new CanonCache();
+  const schemaText = schema === undefined ? '' : cache.get(schema);
   const total = utf8Bytes(schemaText);
-  const occ = collectRepeats(allSubtrees(schema, [], w), minBytes, () => false, w.work);
+  const occ = collectRepeats(allSubtrees(schema, [], w), minBytes, () => false, w.work, cache);
   const removed = new PathSet();
   let waste = 0;
   let groups = 0;
@@ -254,7 +255,7 @@ function duplicateStats(schema: unknown, minBytes: number, tok: Tokenizer | unde
     for (const p of live.slice(1)) removed.add(p);
   }
   top.sort((a, b) => b.wasteBytes - a.wasteBytes || cmp(a.path, b.path));
-  const deduped = dedupRefs(schema, minBytes, w);
+  const deduped = dedupRefs(schema, minBytes, w, schemaText);
   const afterText = deduped.created > 0 ? canonicalJson(deduped.schema) : schemaText;
   return {
     wasteBytes: waste,
@@ -286,11 +287,12 @@ function collectRepeats(
   minBytes: number,
   skip: (p: Path, n: unknown) => boolean,
   work: WorkBudget | undefined,
+  cache: CanonCache,
 ): [string, Repeat][] {
   const occ = new Map<string, Repeat>();
   for (const [p, n] of nodes) {
     if (p.length === 0 || skip(p, n)) continue;
-    const s = canonicalJson(n);
+    const s = cache.get(n);
     work?.spend(Math.ceil(s.length / 1024));
     // UTF-8 is at most 3 bytes per UTF-16 unit: skip the byte count when it cannot reach minBytes.
     if (s.length * 3 < minBytes) continue;
@@ -310,9 +312,9 @@ function collectRepeats(
  * every occurrence at it, largest first, only where the rewrite is smaller.
  * Existing `$defs` entries are kept; new ones are named `_dupN`.
  */
-export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes, w: WalkOptions = {}): { schema: unknown; created: number } {
+export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes, w: WalkOptions = {}, canonical?: string): { schema: unknown; created: number } {
   if (!isObj(schema)) return { schema, created: 0 };
-  const work = JSON.parse(canonicalJson(schema)) as Obj;
+  const work = JSON.parse(canonical ?? canonicalJson(schema)) as Obj;
   const existing = isObj(work['$defs']) ? (work['$defs'] as Obj) : undefined;
   const defs: Obj = existing ?? {};
   let created = 0;
@@ -324,6 +326,7 @@ export function dedupRefs(schema: unknown, minBytes = DEFAULTS.subtreeMinBytes, 
       minBytes,
       (p, n) => (p.length === 2 && p[0] === '$defs') || (isObj(n) && typeof n['$ref'] === 'string' && Object.keys(n).length === 1),
       w.work,
+      new CanonCache(), // fresh per pass: the previous pass rewrote the tree
     );
     const replaced = new PathSet();
     let changed = false;
@@ -461,10 +464,10 @@ function validityFindings(tool: CatalogTool, w: WalkOptions): Finding[] {
       const { default: dv, ...rest } = n;
       const ctx = validateContext();
       const reason = validateValue(dv, rest, schema, ctx);
-      w.work?.spend(ctx.steps);
+      w.work?.spend(ctx.steps + Math.ceil(ctx.bytes / 1024));
       const at = [...SCHEMA_ROOT, ...p, 'default'];
       if (reason) out.push(finding('default-invalid', tool.name, at, reason));
-      else if (ctx.exhausted) out.push(finding('default-unchecked', tool.name, at, 'not fully checked: validation budget exhausted ($ref fan-out, cycles or depth)'));
+      else if (ctx.exhausted) out.push(finding('default-unchecked', tool.name, at, 'not fully checked: validation budget exhausted (steps or bytes: $ref fan-out, large enums or values, depth)'));
       else if (ctx.skippedPattern) out.push(finding('default-unchecked', tool.name, at, 'not checked against `pattern`: regexes from schemas are never executed'));
     }
   }
@@ -477,41 +480,44 @@ function validityFindings(tool: CatalogTool, w: WalkOptions): Finding[] {
 
 const MIN_ESCAPED_JSON_BYTES = 40;
 
-function escapedJsonFindings(tool: CatalogTool, w: WalkOptions): Finding[] {
-  const out: Finding[] = [];
-  for (const [p, s] of allStrings(tool, [], w)) {
-    if (s.length > ANALYZE_MAX_CHARS) continue;
-    const t = s.trim();
-    if (t.length < MIN_ESCAPED_JSON_BYTES || !(t.startsWith('{') || t.startsWith('['))) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(t);
-    } catch {
-      continue;
-    }
-    if (parsed === null || typeof parsed !== 'object') continue;
-    const overhead = utf8Bytes(JSON.stringify(s)) - 2 - utf8Bytes(s);
-    if (overhead <= 0) continue;
-    out.push(
-      finding('escaped-json', tool.name, p, `string holds a JSON ${Array.isArray(parsed) ? 'array' : 'object'}; escaping adds ${overhead} bytes`, {
-        bytes: utf8Bytes(s),
-        overheadBytes: overhead,
-      }),
-    );
-  }
-  return out;
-}
-
 /* ------------------------------------------------------------------ */
 /* untrusted description size                                         */
 /* ------------------------------------------------------------------ */
 
-function descriptionSizeFindings(tool: CatalogTool, cap: number, w: WalkOptions): Finding[] {
+/** One pass over every string in the entry: escaped JSON documents and oversize descriptions. */
+function stringFindings(tool: CatalogTool, cap: number, w: WalkOptions): Finding[] {
   const out: Finding[] = [];
-  for (const [p, s] of allStrings(tool, [], w)) {
-    if (p[p.length - 1] !== 'description') continue;
-    const bytes = utf8Bytes(s);
-    if (bytes > cap) out.push(finding('description-oversize', tool.name, p, `description is ${bytes} bytes (cap ${cap})`, { bytes, cap }));
+  const check = (parent: Path, key: string | number, s: string): void => {
+    if (key === 'description') {
+      const bytes = utf8Bytes(s);
+      if (bytes > cap) out.push(finding('description-oversize', tool.name, [...parent, key], `description is ${bytes} bytes (cap ${cap})`, { bytes, cap }));
+    }
+    if (s.length < MIN_ESCAPED_JSON_BYTES || s.length > ANALYZE_MAX_CHARS) return;
+    const t = s.trim();
+    if (!(t.startsWith('{') || t.startsWith('['))) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(t);
+    } catch {
+      return;
+    }
+    if (parsed === null || typeof parsed !== 'object') return;
+    const overhead = utf8Bytes(JSON.stringify(s)) - 2 - utf8Bytes(s);
+    if (overhead <= 0) return;
+    out.push(
+      finding('escaped-json', tool.name, [...parent, key], `string holds a JSON ${Array.isArray(parsed) ? 'array' : 'object'}; escaping adds ${overhead} bytes`, {
+        bytes: utf8Bytes(s),
+        overheadBytes: overhead,
+      }),
+    );
+  };
+  // why: inspect direct string children per container and build a path only on a hit (enum lists can hold a million strings)
+  for (const [p, n] of allSubtrees(tool, [], w)) {
+    if (Array.isArray(n)) {
+      for (let i = 0; i < n.length; i++) if (typeof n[i] === 'string') check(p, i, n[i] as string);
+    } else {
+      for (const [k, v] of Object.entries(n)) if (typeof v === 'string') check(p, k, v);
+    }
   }
   return out;
 }
@@ -597,8 +603,7 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
     );
   }
 
-  findings.push(...escapedJsonFindings(tool, wt));
-  findings.push(...descriptionSizeFindings(tool, opts.maxDescriptionBytes ?? DEFAULTS.maxDescriptionBytes, wt));
+  findings.push(...stringFindings(tool, opts.maxDescriptionBytes ?? DEFAULTS.maxDescriptionBytes, wt));
   } catch (err) {
     if (!(err instanceof WorkBudgetExceeded)) throw err;
     findings.push(

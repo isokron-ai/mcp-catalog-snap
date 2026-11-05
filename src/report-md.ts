@@ -8,26 +8,21 @@
  */
 
 import { RULES, type Finding, type RuleId, type Severity } from './findings.js';
+import { mdCodeEscape, mdEscape } from './redact.js';
 import type { Measure } from './metrics.js';
 import type { SweepReport } from './sweep.js';
 
-/** Untrusted text → safe inline markdown (one line, ≤ max chars, no HTML / links / table breaks). */
+/** Untrusted text → safe inline markdown (one line, ≤ max chars, no HTML / entities / links / mentions / table breaks). */
 export function mdText(s: string, max = 120): string {
   // eslint-disable-next-line no-control-regex -- stripping control characters from untrusted text is the point
   const flat = s.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
   const cut = flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-  // why: U+2060 WORD JOINER breaks GFM autolinks (scheme://, www.) and @-mentions without changing what a reader sees.
-  return cut
-    .replace(/[\\`*_[\]<>|~]/g, (c) => `\\${c}`)
-    .replace(/:\/\//g, ':\u2060//')
-    .replace(/\bwww\./gi, (m) => `${m.slice(0, 3)}\u2060.`)
-    .replace(/@/g, '@\u2060');
+  return mdEscape(cut);
 }
 
 /** Untrusted text as a code span; backticks and newlines removed so the span cannot be closed early. */
 export function mdCode(s: string, max = 80): string {
-  const flat = s.replace(/[\r\n\t`]+/g, ' ').replace(/\|/g, '\\|');
-  return `\`${flat.length > max ? `${flat.slice(0, max - 1)}…` : flat}\``;
+  return mdCodeEscape(s.length > max ? `${s.slice(0, max - 1)}…` : s);
 }
 
 /** Thousands separators without locale/ICU dependence (deterministic output). */

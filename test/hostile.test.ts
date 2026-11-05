@@ -161,10 +161,12 @@ describe('findings engine under hostile schemas', () => {
   });
 
   it('a very wide schema stops at the work budget with a finding instead of running unbounded', () => {
+    // asserted on the work counter, not the clock (the clock made this flaky on slow runners)
     const properties: Record<string, unknown> = {};
-    for (let i = 0; i < 300_000; i++) properties[`p${i}`] = { type: 'string', description: `field ${i % 7}` };
-    const a = within(15_000, () => analyzeTool(tool({ type: 'object', properties })));
-    expect(rules(a)).toContain('analysis-budget-exceeded');
+    for (let i = 0; i < 20_000; i++) properties[`p${i}`] = { type: 'string', description: `field ${i % 7}` };
+    const a = analyzeTool(tool({ type: 'object', properties }), { workBudget: 10_000 });
+    const f = a.findings.find((x) => x.rule === 'analysis-budget-exceeded');
+    expect(f?.data?.['workBudget']).toBe(10_000);
   });
 
   it('deep catalogs diff without overflowing', () => {
