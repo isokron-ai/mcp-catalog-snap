@@ -4,6 +4,8 @@
  * token is the stdio server command.
  */
 
+import { readFileSync } from 'node:fs';
+
 import type { Target } from './capture.js';
 
 export interface ParsedArgs {
@@ -25,6 +27,7 @@ const BOOLEAN = new Set([
   'version',
   'no-write',
   'update',
+  'anthropic',
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -88,6 +91,49 @@ export function parseEnvAssignment(s: string): [string, string] {
   return [s.slice(0, idx), s.slice(idx + 1)];
 }
 
+/**
+ * Bearer token from `--bearer-file FILE` (first line, trimmed) or
+ * `--bearer-env VAR`. Never echoed: errors name the file or variable only.
+ */
+export function bearerToken(args: ParsedArgs, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const file = str(args.flags['bearer-file']);
+  const envName = str(args.flags['bearer-env']);
+  if (args.flags['bearer-file'] === true) throw new Error('--bearer-file needs a path');
+  if (args.flags['bearer-env'] === true) throw new Error('--bearer-env needs a variable name');
+  if (file !== undefined && envName !== undefined) throw new Error('give --bearer-file or --bearer-env, not both');
+  let token: string | undefined;
+  if (file !== undefined) {
+    try {
+      token = (readFileSync(file, 'utf8').split(/\r?\n/)[0] ?? '').trim();
+    } catch (err) {
+      throw new Error(`cannot read --bearer-file ${file}: ${(err as NodeJS.ErrnoException).code ?? 'error'}`);
+    }
+    if (!token) throw new Error(`--bearer-file ${file} is empty`);
+  } else if (envName !== undefined) {
+    token = env[envName]?.trim();
+    if (!token) throw new Error(`--bearer-env ${envName}: variable is unset or empty`);
+  }
+  return token;
+}
+
+/** Secret values carried by a target (header values), for redacting error text. */
+export function targetSecrets(t: Target | undefined): string[] {
+  if (!t || t.kind !== 'http' || !t.headers) return [];
+  const out: string[] = [];
+  for (const v of Object.values(t.headers)) {
+    out.push(v);
+    const m = /^\S+\s+(.+)$/.exec(v);
+    if (m) out.push(m[1]!);
+  }
+  return out.filter((s) => s.length >= 4).sort((a, b) => b.length - a.length);
+}
+
+export function redact(text: string, secrets: readonly string[]): string {
+  let out = text;
+  for (const s of secrets) out = out.split(s).join('***');
+  return out;
+}
+
 /** Build an ad-hoc target from `--url ...` or `-- cmd args`, or undefined. */
 export function targetFromArgs(args: ParsedArgs): Target | undefined {
   const url = str(args.flags['url']);
@@ -99,6 +145,13 @@ export function targetFromArgs(args: ParsedArgs): Target | undefined {
     for (const h of args.multi['header'] ?? []) {
       const [k, v] = parseHeader(h);
       headers[k] = v;
+    }
+    const bearer = bearerToken(args);
+    if (bearer !== undefined) {
+      if (Object.keys(headers).some((k) => k.toLowerCase() === 'authorization')) {
+        throw new Error('give the token either with --bearer-file / --bearer-env or as an Authorization --header, not both');
+      }
+      headers['Authorization'] = `Bearer ${bearer}`;
     }
     const t: Target = { kind: 'http', url };
     if (Object.keys(headers).length > 0) t.headers = headers;

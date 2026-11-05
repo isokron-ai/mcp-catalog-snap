@@ -6,13 +6,16 @@
  *   mcp-catalog-snap check    [--server N] [--ignore-descriptions] [--allow-additions] [--json]
  *   mcp-catalog-snap diff     A.json B.json [--ignore-descriptions] [--allow-additions] [--json]
  *   mcp-catalog-snap hash     [FILE | --url U | -- cmd args...]
+ *   mcp-catalog-snap sweep    [--from FILE | --url U | -- cmd args...] [--adapter A] [--json] ...
  */
 
-import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js';
+import { bool, parseArgs, redact, str, targetFromArgs, targetSecrets, type ParsedArgs } from './args.js';
+import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
 import { VERSION } from './version.js';
 
-const HELP = `mcp-catalog-snap ${VERSION} — snapshot an MCP server's tool catalog, fail CI on byte drift
+const HELP = `mcp-catalog-snap ${VERSION} — snapshot an MCP server's tool catalog, fail CI on byte drift,
+and run a static sweep (sizes, tokens, schema findings) over it
 
 Usage:
   mcp-catalog-snap snapshot [options] -- <command> [args...]   capture a stdio server
@@ -21,10 +24,13 @@ Usage:
   mcp-catalog-snap check    [options]                           re-capture + diff against the snapshot(s)
   mcp-catalog-snap diff     A.json B.json [--json]              diff two snapshot files
   mcp-catalog-snap hash     [FILE | --url URL | -- <command>]   print the catalog fingerprint (sha256)
+  mcp-catalog-snap sweep    [--from FILE | --url URL | -- <command>] [options]   static sweep report
 
 Target options (snapshot / check / hash):
   --url URL             Streamable HTTP endpoint
   --header "Name: v"    extra HTTP header (repeatable)
+  --bearer-file FILE    send "Authorization: Bearer <first line of FILE>" (never printed)
+  --bearer-env VAR      same, token read from environment variable VAR
   --env KEY=value       extra env for the stdio child (repeatable)
   --cwd DIR             working directory for the stdio child
   --name NAME           snapshot name for an ad-hoc target (default: the server's reported name)
@@ -45,8 +51,67 @@ snapshot options:
   --no-write            print the snapshot to stdout instead of writing it
   --quiet               no summary on success
 
-Exit codes: 0 no drift · 1 drift · 2 error · 3 snapshot failed its sha256 integrity check
+sweep options:
+  --from FILE           offline input: tools/list result, JSON-RPC response, tools array,
+                        snapshot file, or (exec adapters) a JSONL dump
+  --adapter ID          tools-list (default) | posthog-exec
+  --name NAME           server name to report
+  --tokenizers LIST     comma list of cl100k (default), o200k, chars4
+  --budget-tokenizer ID tokenizer budgets and rankings use (default cl100k)
+  --max-tool-tokens N   fail (exit 4) when any tool's exposure is over N tokens
+  --max-catalog-tokens N  fail (exit 4) when the whole catalog's exposure is over N tokens
+  --enum-max N          enum size that triggers enum-large (default 20)
+  --max-description-bytes N  description size that triggers description-oversize (default 16384)
+  --anthropic           also ask Anthropic count_tokens (needs ANTHROPIC_API_KEY; sends the catalog)
+  --anthropic-model M   model for --anthropic (default claude-opus-5-5)
+  --call-results FILE   JSONL of {"tool", "result"} observed tools/call results to check
+  --save-raw FILE       (live exec adapters) save what was fetched, for a later --from re-run
+  --json                print the JSON report instead of the markdown summary
+  --report FILE         also write the JSON report to FILE
+  --md FILE             also write the markdown summary to FILE
+  --top N               rows in the largest-tools table (default 15)
+
+Exit codes: 0 ok / no drift · 1 drift · 2 error · 3 snapshot failed its sha256 integrity check
+            · 4 sweep budget exceeded
 `;
+
+function num(args: ParsedArgs, key: string, integer = true): number | undefined {
+  const v = str(args.flags[key]);
+  if (args.flags[key] === true) throw new Error(`--${key} needs a value`);
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) throw new Error(`--${key} expects a non-negative ${integer ? 'integer' : 'number'}, got ${v}`);
+  return n;
+}
+
+function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs>): SweepCommandOptions {
+  const o: SweepCommandOptions = { json: bool(args.flags['json']), anthropic: bool(args.flags['anthropic']) };
+  const set = <K extends keyof SweepCommandOptions>(k: K, v: SweepCommandOptions[K] | undefined): void => {
+    if (v !== undefined) o[k] = v;
+  };
+  set('target', target);
+  set('from', str(args.flags['from']));
+  set('adapter', str(args.flags['adapter']));
+  set('name', str(args.flags['name']));
+  set('timeoutMs', timeoutMs(args));
+  const toks = str(args.flags['tokenizers']);
+  set('tokenizers', toks === undefined ? undefined : toks.split(',').map((t) => t.trim()).filter(Boolean));
+  set('budgetTokenizer', str(args.flags['budget-tokenizer']));
+  set('maxToolTokens', num(args, 'max-tool-tokens'));
+  set('maxCatalogTokens', num(args, 'max-catalog-tokens'));
+  set('enumMax', num(args, 'enum-max'));
+  set('maxDescriptionBytes', num(args, 'max-description-bytes'));
+  set('anthropicModel', str(args.flags['anthropic-model']));
+  set('callResults', str(args.flags['call-results']));
+  set('saveRaw', str(args.flags['save-raw']));
+  set('reportFile', str(args.flags['report']));
+  set('mdFile', str(args.flags['md']));
+  set('top', num(args, 'top'));
+  for (const k of ['from', 'report', 'md', 'save-raw', 'call-results', 'adapter', 'tokenizers']) {
+    if (args.flags[k] === true) throw new Error(`--${k} needs a value`);
+  }
+  return o;
+}
 
 function timeoutMs(args: ParsedArgs): number | undefined {
   const t = str(args.flags['timeout']);
@@ -85,9 +150,12 @@ export async function main(argv: string[], io: IO): Promise<number> {
     return EXIT_OK;
   }
 
+  let secrets: string[] = [];
   try {
+    const target = targetFromArgs(args);
+    secrets = targetSecrets(target);
     const common = {
-      ...optional('target', targetFromArgs(args)),
+      ...optional('target', target),
       ...optional('name', str(args.flags['name'])),
       ...optional('config', str(args.flags['config'])),
       ...optional('server', str(args.flags['server'])),
@@ -111,6 +179,12 @@ export async function main(argv: string[], io: IO): Promise<number> {
         }
         return cmdDiff(a, b, policy(args), io);
       }
+      case 'sweep':
+        if (args.positional.length > 0) {
+          io.err(`error: unexpected argument ${JSON.stringify(args.positional[0])} (offline input goes in --from FILE)`);
+          return EXIT_ERROR;
+        }
+        return await cmdSweep(sweepOptions(args, target), io);
       case 'hash': {
         const file = args.positional[0];
         return await cmdHash({ ...common, ...optional('file', file), json: false }, io);
@@ -121,7 +195,7 @@ export async function main(argv: string[], io: IO): Promise<number> {
         return EXIT_ERROR;
     }
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${redact((err as Error).message, secrets)}`);
     return EXIT_ERROR;
   }
 }

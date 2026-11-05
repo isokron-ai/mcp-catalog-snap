@@ -39,6 +39,7 @@ export const RULES = {
   'escaped-json': { severity: 'info', summary: 'JSON carried as an escaped string, paying escape overhead' },
   'untyped-node': { severity: 'info', summary: 'schema nodes that accept anything ({} / items: {} / opaque objects)' },
   'oversize-tool': { severity: 'warn', summary: 'tool exposure is over the per-tool token budget' },
+  'oversize-catalog': { severity: 'error', summary: 'catalog exposure is over the catalog token budget' },
   'annotations-missing': { severity: 'info', summary: 'no readOnlyHint / destructiveHint annotation' },
   'annotation-contradiction': { severity: 'warn', summary: 'annotations contradict each other or the tool name' },
   'output-duplication-risk': { severity: 'info', summary: 'declares outputSchema: results may repeat structuredContent as text' },
@@ -364,6 +365,8 @@ function untypedStats(schema: unknown): UntypedStats {
 /* annotations                                                        */
 /* ------------------------------------------------------------------ */
 
+/** Words marking a step that does not itself execute the verb (two-phase `*-delete-prepare`, previews). */
+const NON_EXECUTING = new Set(['prepare', 'preview', 'plan', 'dry', 'dryrun', 'simulate', 'validate', 'estimate']);
 const DESTRUCTIVE_VERBS = new Set(['delete', 'remove', 'destroy', 'drop', 'purge', 'erase', 'wipe', 'truncate', 'revoke', 'uninstall', 'terminate', 'kill']);
 
 /** Lower-case words of a tool name: `deleteUser`, `user-delete`, `user.delete_all` → … */
@@ -383,7 +386,8 @@ function annotationFindings(tool: CatalogTool): Finding[] {
   if (ro === undefined && de === undefined) {
     out.push(finding('annotations-missing', tool.name, a ? ['annotations'] : '', 'no readOnlyHint or destructiveHint; clients must assume the tool may destroy data'));
   }
-  const verb = nameWords(tool.name).find((w) => DESTRUCTIVE_VERBS.has(w));
+  const words = nameWords(tool.name);
+  const verb = words.some((w) => NON_EXECUTING.has(w)) ? undefined : words.find((w) => DESTRUCTIVE_VERBS.has(w));
   if (verb && ro === true) {
     out.push(finding('annotation-contradiction', tool.name, ['annotations', 'readOnlyHint'], `name says "${verb}" but readOnlyHint is true`, { verb }, 'error'));
   } else if (verb && de === false) {

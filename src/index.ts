@@ -151,4 +151,15 @@ export {
   type Tokenizer,
   type TokenizerFactory,
 } from './tokenize.js';
+export { EXIT_BUDGET, cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
+export { mdCode, mdText, renderSweepMarkdown, type MarkdownOptions } from './report-md.js';
+export {
+  DEFAULT_ADVISORY_TOOL_TOKENS,
+  REPORT_FORMAT,
+  runSweep,
+  serializeReport,
+  type SweepOptions,
+  type SweepReport,
+  type ToolReport,
+} from './sweep.js';
 export { VERSION } from './version.js';

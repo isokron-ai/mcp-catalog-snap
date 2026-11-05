@@ -8,6 +8,21 @@ uses semantic versioning once past 0.x.
 
 ### Added
 
+- **`sweep` command: the free static sweep.** Input: a live stdio or
+  Streamable HTTP server, `--from FILE` (tools/list result, JSON-RPC
+  response, tools array, snapshot, or an exec JSONL dump), `--adapter
+  tools-list|posthog-exec`. Output: a versioned JSON report
+  (`mcp-catalog-snap/sweep/1`, byte-identical for the same input, no
+  timestamps) and a markdown summary (stdout, `--md FILE`; `--json`,
+  `--report FILE`). Budgets: `--max-tool-tokens`, `--max-catalog-tokens`;
+  **exit 4** when exceeded (exits 0–3 unchanged). Also `--tokenizers`,
+  `--budget-tokenizer`, `--enum-max`, `--max-description-bytes`,
+  `--anthropic` (opt-in), `--call-results`, `--save-raw`, `--top`.
+- `--bearer-file FILE` / `--bearer-env VAR` for every `--url` command. The
+  token is never printed or written; error text is redacted.
+- `runSweep`, `serializeReport`, `renderSweepMarkdown`, `cmdSweep`,
+  `EXIT_BUDGET` in the programmatic API.
+
 - Size metrics (programmatic API): `measureTool` gives bytes and token counts
   per field (`name`, `title`, `description`, `inputSchema`, `outputSchema`,
   `annotations`) and for the whole entry's canonical JSON. Per-tool
