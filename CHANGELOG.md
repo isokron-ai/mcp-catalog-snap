@@ -31,7 +31,9 @@ uses semantic versioning once past 0.x.
   `description-repeats-enum` and `enum-in-prose` (DRF-style
   ``* `x` - x`` lists), `duplicate-subtree` (repeated bytes, % of schema,
   top offenders, `$defs/$ref` rewrite estimate), `escaped-json`,
-  `untyped-node`, `oversize-tool`, `annotations-missing`,
+  `untyped-node`, `description-oversize` (descriptions are treated as
+  untrusted text: size-capped, never executed; regexes from schemas run only
+  when they cannot backtrack catastrophically), `oversize-tool`, `annotations-missing`,
   `annotation-contradiction` (e.g. a `delete` tool with
   `destructiveHint: false`), `output-duplication-risk` and, for observed
   call results, `structured-content-duplicated`.

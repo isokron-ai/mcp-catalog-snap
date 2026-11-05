@@ -84,6 +84,7 @@ export {
   type AnthropicCounts,
 } from './anthropic.js';
 export {
+  ANALYZE_MAX_CHARS,
   CHOICE_LIST_EDGES,
   RULES,
   analyzeCallResult,

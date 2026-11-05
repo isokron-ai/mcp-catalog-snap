@@ -14,7 +14,7 @@ import {
 import { PathSet, pointer, resolveLocalRef, schemaNodes } from '../src/schema-walk.js';
 import type { CatalogTool } from '../src/snapshot.js';
 import { loadTokenizer } from '../src/tokenize.js';
-import { keywordProblems, validateValue } from '../src/validate.js';
+import { keywordProblems, safeToRun, validateValue } from '../src/validate.js';
 
 const rules = (fs: Finding[]): string[] => fs.map((f) => `${f.rule} ${f.path}`);
 
@@ -268,6 +268,23 @@ describe('untyped, escaped JSON, annotations, output duplication', () => {
     expect(dup!.data!['duplicatedTokens']).toBeGreaterThan(0);
     expect(analyzeCallResult('t', { structuredContent: sc, content: [{ type: 'text', text: '{"rows":[1]}' }] })).toBeNull();
     expect(analyzeCallResult('t', { content: [] })).toBeNull();
+  });
+
+  it('descriptions are untrusted: size cap finding, no ReDoS on hostile patterns, huge strings not scanned', () => {
+    const long = 'x'.repeat(20_000);
+    const a = analyzeTool({ name: 't', description: long, inputSchema: { type: 'object', properties: { p: { type: 'string', description: 'ok' } } } });
+    expect(rules(a.findings.filter((f) => f.rule === 'description-oversize'))).toEqual(['description-oversize /description']);
+    expect(analyzeTool({ name: 't', description: long, inputSchema: { type: 'object' } }, { maxDescriptionBytes: 50_000 }).findings.some((f) => f.rule === 'description-oversize')).toBe(false);
+    expect(safeToRun('^(a+)+$', 'aaaa')).toBe(false);
+    expect(safeToRun('^([a-z]*)*x', 'a')).toBe(false);
+    expect(safeToRun('^(\\w)\\1$', 'aa')).toBe(false);
+    expect(safeToRun('^[a-z]+(-[a-z]+)?$', 'ab-cd')).toBe(true);
+    const started = Date.now();
+    const evil = analyzeTool({ name: 't', inputSchema: { type: 'object', properties: { p: { type: 'string', pattern: '^(a+)+$', default: `${'a'.repeat(40)}!` } } } });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(evil.findings.some((f) => f.rule === 'default-invalid')).toBe(false);
+    const hugeDrf = `* \`a\` - A\n${'y'.repeat(1 << 20)}`;
+    expect(drfValues(hugeDrf)).toEqual([]);
   });
 
   it('oversizeFinding and summarizeFindings', () => {

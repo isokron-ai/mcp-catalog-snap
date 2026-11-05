@@ -76,6 +76,17 @@ export function keywordProblems(node: Obj, root: unknown): string[] {
   return out;
 }
 
+/**
+ * Patterns come from untrusted schemas and JS regexes cannot be time-boxed,
+ * so a default is only tested against a short pattern with no nested
+ * quantifier (`(a+)+`, `(\\w*)*`, …), on a short value. Anything else is
+ * skipped, not reported.
+ */
+export function safeToRun(pattern: string, value: string): boolean {
+  if (pattern.length > 512 || value.length > 1024) return false;
+  return !/\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]/.test(pattern) && !/\\[1-9]/.test(pattern);
+}
+
 function typeOf(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
@@ -130,7 +141,7 @@ export function validateValue(value: unknown, schema: unknown, root: unknown, de
     const len = [...value].length;
     if (typeof schema['minLength'] === 'number' && len < schema['minLength']) return `string shorter than minLength ${schema['minLength']}`;
     if (typeof schema['maxLength'] === 'number' && len > schema['maxLength']) return `string longer than maxLength ${schema['maxLength']}`;
-    if (typeof schema['pattern'] === 'string' && compiles(schema['pattern'])) {
+    if (typeof schema['pattern'] === 'string' && safeToRun(schema['pattern'], value) && compiles(schema['pattern'])) {
       let re: RegExp;
       try {
         re = new RegExp(schema['pattern'], 'u');

@@ -35,6 +35,7 @@ export const RULES = {
   'description-repeats-enum': { severity: 'warn', summary: 'description spells out values the enum already lists' },
   'enum-in-prose': { severity: 'warn', summary: 'allowed values listed only in a description, with no enum to enforce them' },
   'duplicate-subtree': { severity: 'warn', summary: 'repeated schema subtrees that $defs/$ref could emit once' },
+  'description-oversize': { severity: 'warn', summary: 'description longer than the cap (descriptions are untrusted text)' },
   'escaped-json': { severity: 'info', summary: 'JSON carried as an escaped string, paying escape overhead' },
   'untyped-node': { severity: 'info', summary: 'schema nodes that accept anything ({} / items: {} / opaque objects)' },
   'oversize-tool': { severity: 'warn', summary: 'tool exposure is over the per-tool token budget' },
@@ -62,11 +63,20 @@ export interface FindingsOptions {
   enumMax?: number;
   /** Smallest serialized subtree, in bytes, considered for duplication (default 200). */
   subtreeMinBytes?: number;
+  /**
+   * Descriptions are untrusted text: one over this many UTF-8 bytes gets a
+   * `description-oversize` finding (default 16384). Strings over 1 MiB are
+   * measured but never scanned or parsed.
+   */
+  maxDescriptionBytes?: number;
   /** Reference tokenizer for $defs savings estimates (bytes only when absent). */
   tokenizer?: Tokenizer;
 }
 
-const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200 };
+const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200, maxDescriptionBytes: 16_384 };
+
+/** Strings longer than this (UTF-16 units) are never regex-scanned or JSON-parsed. */
+export const ANALYZE_MAX_CHARS = 1 << 20;
 
 export interface ChoiceList {
   path: string;
@@ -137,7 +147,7 @@ const SCHEMA_ROOT: Path = ['inputSchema'];
 const DRF_LINE = /^\* `(.*?)` - .*$/gm;
 
 export function drfValues(desc: unknown): string[] {
-  if (typeof desc !== 'string') return [];
+  if (typeof desc !== 'string' || desc.length > ANALYZE_MAX_CHARS) return [];
   return [...desc.matchAll(DRF_LINE)].map((m) => m[1]!);
 }
 
@@ -444,6 +454,7 @@ const MIN_ESCAPED_JSON_BYTES = 40;
 function escapedJsonFindings(tool: CatalogTool): Finding[] {
   const out: Finding[] = [];
   for (const [p, s] of allStrings(tool)) {
+    if (s.length > ANALYZE_MAX_CHARS) continue;
     const t = s.trim();
     if (t.length < MIN_ESCAPED_JSON_BYTES || !(t.startsWith('{') || t.startsWith('['))) continue;
     let parsed: unknown;
@@ -461,6 +472,20 @@ function escapedJsonFindings(tool: CatalogTool): Finding[] {
         overheadBytes: overhead,
       }),
     );
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* untrusted description size                                         */
+/* ------------------------------------------------------------------ */
+
+function descriptionSizeFindings(tool: CatalogTool, cap: number): Finding[] {
+  const out: Finding[] = [];
+  for (const [p, s] of allStrings(tool)) {
+    if (p[p.length - 1] !== 'description') continue;
+    const bytes = utf8Bytes(s);
+    if (bytes > cap) out.push(finding('description-oversize', tool.name, p, `description is ${bytes} bytes (cap ${cap})`, { bytes, cap }));
   }
   return out;
 }
@@ -529,6 +554,7 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
   }
 
   findings.push(...escapedJsonFindings(tool));
+  findings.push(...descriptionSizeFindings(tool, opts.maxDescriptionBytes ?? DEFAULTS.maxDescriptionBytes));
   findings.push(...annotationFindings(tool));
 
   if (tool.outputSchema !== undefined) {
