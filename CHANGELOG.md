@@ -4,6 +4,24 @@ All notable changes to mcp-catalog-snap. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses semantic versioning once past 0.x.
 
+## [Unreleased]
+
+### Added
+
+- Size metrics (programmatic API): `measureTool` gives bytes and token counts
+  per field (`name`, `title`, `description`, `inputSchema`, `outputSchema`,
+  `annotations`) and for the whole entry's canonical JSON, plus a per-tool
+  contract fingerprint (`fingerprint`, sha256 of the JCS entry) and an
+  `inputSchemaFingerprint` that ignores wording-only changes.
+- Pluggable tokenizers: `cl100k` (tiktoken cl100k_base via `js-tiktoken`,
+  the reference scale), `o200k`, the `chars4` heuristic, and
+  `registerTokenizer` for your own. Every count carries its tokenizer label.
+- `orderedToolsFingerprint`: sha256 over the tools array in server order,
+  identical to IsoKron ADR-0005's `hashMcpToolDefinitions`. The catalog
+  fingerprint (`sha256` in snapshots) is unchanged.
+- `anthropicToolCounts`: optional provider-reported counts from Anthropic's
+  `count_tokens` endpoint (per-tool marginal and whole catalog).
+
 ## [0.1.1] — 2026-11-01
 
 ### Fixed
