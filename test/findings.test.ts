@@ -254,6 +254,8 @@ describe('untyped, escaped JSON, annotations, output duplication', () => {
     expect(ro.map((f) => [f.rule, f.severity])).toEqual([['annotation-contradiction', 'error']]);
     const both = analyzeTool({ name: 'x', inputSchema: s, annotations: { readOnlyHint: true, destructiveHint: true } }).findings;
     expect(both.map((f) => f.message)).toEqual(['readOnlyHint and destructiveHint are both true']);
+    // a two-phase prepare / preview step does not execute the verb
+    expect(analyzeTool({ name: 'metric-delete-prepare', inputSchema: s, annotations: { readOnlyHint: true } }).findings).toEqual([]);
     // "deleted" is not the verb "delete"
     expect(analyzeTool({ name: 'list-deleted', inputSchema: s, annotations: { readOnlyHint: true } }).findings).toEqual([]);
   });

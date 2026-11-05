@@ -8,6 +8,12 @@
 byte that changed — a schema field, an annotation, a reworded description —
 is reported with its JSON path, and the exit code is 1.
 
+`mcp-catalog-snap sweep` is the free static sweep: bytes and reference
+tokens per tool, per-tool contract fingerprints, and schema findings
+(enum blowups, duplicated subtrees, untyped fields, invalid schemas,
+annotation contradictions…) as a versioned JSON report plus a markdown
+summary. See [Static sweep](#static-sweep).
+
 ## Why
 
 Every model request carries the tool definitions. Two things depend on
@@ -77,6 +83,11 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 | `check [--server N] [--ignore-descriptions] [--allow-additions] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
 | `diff A.json B.json [--json]` | diff two snapshot files |
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
+| `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
+
+`--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
+for `Authorization: Bearer …`. The token is never printed, logged or
+written to a report; error messages are redacted.
 
 Policy flags:
 
@@ -100,6 +111,93 @@ from git, or re-capture it with `snapshot` and review the diff. The hash is
 an integrity check, not a signature: someone who edits the catalog *and*
 recomputes `sha256` produces a valid file, which is why snapshot changes
 belong in code review.
+
+## Static sweep
+
+```sh
+# a live server (stdio or Streamable HTTP)
+mcp-catalog-snap sweep -- npx -y kronicle-lite serve
+mcp-catalog-snap sweep --url https://mcp.example.com/mcp --bearer-env EXAMPLE_TOKEN
+
+# offline: a saved tools/list result, JSON-RPC response, tools array or snapshot file
+mcp-catalog-snap sweep --from tools.json --report sweep.json --md sweep.md
+
+# an exec/CLI-style server (one `exec` tool with tools / info / schema commands)
+mcp-catalog-snap sweep --adapter posthog-exec --url "$POSTHOG_MCP_URL" \
+  --bearer-file ~/.posthog-key --save-raw posthog.jsonl
+mcp-catalog-snap sweep --adapter posthog-exec --from posthog.jsonl   # byte-identical re-run
+
+# CI: fail when any tool is over 4,000 tokens or the catalog over 60,000
+mcp-catalog-snap sweep --from tools.json --max-tool-tokens 4000 --max-catalog-tokens 60000
+```
+
+stdout is the markdown summary (`--json` prints the JSON report instead).
+
+**What a number means.** Every token figure is *catalog exposure*: each
+tool counted once, as if the whole catalog were loaded. It is not session
+exposure (what one client loaded) or task exposure (what an agent pulled).
+`cl100k` (tiktoken cl100k_base) is a reference scale for comparing servers,
+not a Claude tokenizer; every count carries its tokenizer label.
+
+| measured | how |
+| --- | --- |
+| exposure | `tools-list`: the RFC 8785 canonical JSON of each `tools/list` entry. Exec adapters: the `info <tool>` output text the wrapper returns |
+| fields | `name`, `title`, `description` (raw text), `inputSchema`, `outputSchema`, `annotations` (canonical JSON) |
+| views | exec adapters: unsummarized `info`, `info --json`, `schema` outputs |
+| embedded schema | exec adapters: the schema as an escaped string inside `info` vs as plain JSON |
+| tokenizers | `--tokenizers cl100k,o200k,chars4` (default `cl100k`; `chars4` = `ceil(chars/4)`, the heuristic some servers use for limits) |
+| provider count | `--anthropic`: Anthropic `count_tokens` per tool and for the whole catalog. Opt-in because it sends the catalog to a third party; skipped with a note when `ANTHROPIC_API_KEY` is unset |
+
+**Fingerprints.**
+
+- `fingerprints.catalog`: the snapshot `sha256`, unchanged from v0.1
+  (sha256 of canonical JSON over sorted `{tools, prompts, resourceTemplates}`).
+  A tools-only input (tools/list file, exec adapter) hashes empty prompts
+  and templates.
+- `fingerprints.toolsOrdered`: sha256 of canonical JSON over the tools
+  array **in server order**. This is IsoKron ADR-0005's
+  `hashMcpToolDefinitions` (deep key sort, array order kept), so the two
+  agree on the same `tools/list`. `null` when the order is unknown
+  (snapshot input).
+- per tool: `fingerprint` = sha256 of canonical `{inputSchema, outputSchema}`
+  (the contract: a wording edit does not move it, so proxy rule packs
+  pinned to it survive), `descriptionFingerprint` (wording drift on its own),
+  `entryFingerprint` (every field).
+
+**Findings** (stable rule ids; `error` / `warn` / `info`):
+
+| rule | fires on |
+| --- | --- |
+| `schema-missing`, `schema-invalid` | no `inputSchema`; root not `type: "object"`; bad `type` names (`"unknown"`), draft-03 boolean `required`, uncompilable `pattern`, dangling `$ref`, malformed keywords |
+| `required-not-in-properties` | `required` names an undefined property (error when `additionalProperties: false`) |
+| `default-invalid` | a `default` that fails its own schema |
+| `enum-large` | enum / const-union over `--enum-max` values (default 20); sizes also go in a histogram |
+| `description-repeats-enum`, `enum-in-prose` | DRF-style ``* `x` - x`` lists that restate an enum, or list values with no enum to enforce them |
+| `duplicate-subtree` | repeated subtrees ≥ 200 bytes: waste bytes, % of schema, top offenders, `$defs/$ref` rewrite estimate |
+| `escaped-json` | JSON carried inside a string (a default, or the exec `info` payload) |
+| `untyped-node` | `{}` nodes, `items: {}`, opaque objects; exec `schema` views with `type: "unknown"` |
+| `description-oversize` | a description over `--max-description-bytes` (default 16384) |
+| `oversize-tool`, `oversize-catalog` | exposure over the budget (advisory 5,000 per tool when no budget is set) |
+| `annotations-missing`, `annotation-contradiction` | no `readOnlyHint`/`destructiveHint`; a `delete`/`remove`/… tool with `destructiveHint: false` or `readOnlyHint: true`; both hints true |
+| `output-duplication-risk`, `structured-content-duplicated` | `outputSchema` declared (results may repeat `structuredContent` as text); with `--call-results FILE` (JSONL `{"tool","result"}`), observed duplication |
+
+**Report** (`--report FILE` / `--json`): `format: "mcp-catalog-snap/sweep/1"`,
+then `server`, `source` (URL origin + path, or the stdio command basename:
+never credentials), `measurement`, `fingerprints`, `totals`, `histograms`,
+`budget`, `anthropic`, `findingsSummary`, `tools[]`, `findings[]`, `notes`.
+The output is deterministic: no timestamps, tools and findings sorted, so
+the same input gives a byte-identical report. Additive fields keep the
+format; a rename or removal bumps it.
+
+**Untrusted input.** Tool names, descriptions and schemas are data from the
+server. They are never executed; descriptions over the cap are flagged;
+strings over 1 MiB are measured but not scanned; schema `pattern`s run
+against defaults only when they cannot backtrack catastrophically;
+tokenization of very long text is bounded; markdown output escapes server
+text.
+
+Exit codes: **0** swept, within budget · **2** error · **3** `--from`
+snapshot failed its integrity check · **4** an explicit budget was exceeded.
 
 ## Output
 
@@ -246,6 +344,12 @@ servers, checked in this repo's own CI:
   non-deterministic order across pages still ends up sorted, so order
   changes are invisible by design (clients do not promise to preserve order
   either).
+- The sweep is static. It reads the catalog only (exec adapters run
+  read-only `tools` / `info` / `schema` commands, never `call`), so it says
+  nothing about response sizes, errors or task success.
+- The exec adapter's live mode trusts `info --json` for the contract; a
+  server that summarizes large schemas there yields summarized contracts.
+  Offline dumps that carry `full_schema` do not have this limit.
 - Resource *instances* (`resources/list`) are not captured — they are data,
   not catalog. Resource templates are.
 
