@@ -3,10 +3,11 @@
  * live target or a saved file.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { CaptureOptions, Target } from '../capture.js';
+import { readInputText } from '../read-input.js';
 import { assertNoSecrets } from '../redact.js';
 import { EXEC_PROFILES, parseExecRecords, serializeExecRecords, sweepInputFromExecRecords, sweepInputFromExecServer } from './exec.js';
 import { TOOLS_LIST_ADAPTER, parseToolsListFile, sweepInputFromServer } from './tools-list.js';
@@ -38,7 +39,7 @@ export async function loadSweepInput(opts: LoadOptions): Promise<SweepInput> {
   }
 
   if (opts.from !== undefined) {
-    const text = readFileSync(opts.from, 'utf8');
+    const text = readInputText(opts.from, '--from');
     if (adapter === TOOLS_LIST_ADAPTER) return parseToolsListFile(text, opts.from, opts.name);
     const records = parseExecRecords(text, basename(opts.from));
     if (records.length === 0) throw new Error(`${opts.from}: no records`);

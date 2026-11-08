@@ -53,6 +53,17 @@ uses semantic versioning once past 0.x.
 
 ### Changed
 
+- Options are strict (all commands). An unknown option is an error naming
+  the closest known one (`sweep --max-tool-token 4000`, a typo, used to run
+  with no budget and exit 0); a repeated single-value option is an error;
+  `--flag=value` booleans take only true/false/1/0; numbers must be plain
+  decimal safe integers (`''` used to mean 0, `0x10` 16); `--__proto__`
+  is an ordinary unknown option.
+- Input files are read with a cap (64 MiB; bearer files 64 KiB):
+  `--from /dev/zero` or `hash /dev/zero` aborted with std::bad_alloc (exit
+  134), now exit 2 with "is larger than … bytes". A UTF-8 BOM is ignored.
+  `/dev/stdin` also works when stdin is a socket.
+
 - `package.json` is `0.2.0-dev`, so the report `generator`, the snapshot
   `capturedWith` and `--version` no longer claim 0.1.1 for unreleased
   0.2 code; a test keeps the version ahead of the last released one while

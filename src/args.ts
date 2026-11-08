@@ -4,9 +4,8 @@
  * token is the stdio server command.
  */
 
-import { readFileSync } from 'node:fs';
-
 import type { Target } from './capture.js';
+import { readInputText } from './read-input.js';
 import { assertCredentialLengths } from './redact.js';
 
 export interface ParsedArgs {
@@ -16,10 +15,12 @@ export interface ParsedArgs {
   multi: Record<string, string[]>;
   /** Tokens after `--`. */
   command: string[];
+  /** Single-value options given more than once. */
+  repeated: string[];
 }
 
-const REPEATABLE = new Set(['header', 'env']);
-const BOOLEAN = new Set([
+export const REPEATABLE: ReadonlySet<string> = new Set(['header', 'env']);
+export const BOOLEAN: ReadonlySet<string> = new Set([
   'json',
   'ignore-descriptions',
   'allow-additions',
@@ -35,9 +36,11 @@ const BOOLEAN = new Set([
 export function parseArgs(argv: string[]): ParsedArgs {
   const [cmd = 'help', ...rest] = argv;
   const positional: string[] = [];
-  const flags: Record<string, string | true> = {};
-  const multi: Record<string, string[]> = {};
+  // null prototype: option names are user input (`--__proto__` must stay a key, and be reported as unknown)
+  const flags: Record<string, string | true> = Object.create(null) as Record<string, string | true>;
+  const multi: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
   const command: string[] = [];
+  const repeated: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (a === '--') {
@@ -62,13 +65,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
         if (value === undefined) throw new Error(`--${key} needs a value`);
         (multi[key] ??= []).push(value);
       } else {
+        if (Object.hasOwn(flags, key) && !repeated.includes(key)) repeated.push(key);
         flags[key] = value ?? true;
       }
     } else {
       positional.push(a);
     }
   }
-  return { cmd, positional, flags, multi, command };
+  return { cmd, positional, flags, multi, command, repeated };
 }
 
 export function str(v: string | true | undefined): string | undefined {
@@ -106,9 +110,10 @@ export function bearerToken(args: ParsedArgs, env: NodeJS.ProcessEnv = process.e
   let token: string | undefined;
   if (file !== undefined) {
     try {
-      token = (readFileSync(file, 'utf8').split(/\r?\n/)[0] ?? '').trim();
+      token = (readInputText(file, '--bearer-file', 64 * 1024).split(/\r?\n/)[0] ?? '').trim();
     } catch (err) {
-      throw new Error(`cannot read --bearer-file ${file}: ${(err as NodeJS.ErrnoException).code ?? 'error'}`);
+      // the code (ENOENT, …) or our size message: never file contents
+      throw new Error(`cannot read --bearer-file ${file}: ${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
     }
     if (!token) throw new Error(`--bearer-file ${file} is empty`);
   } else if (envName !== undefined) {

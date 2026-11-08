@@ -85,6 +85,13 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
 | `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
 
+Options are strict: an option the command does not take (a typo such as
+`--max-tool-token`) is an error (exit 2) that names the closest one, a
+single-value option may be given once, numbers are plain decimal integers,
+and input files (`--from`, snapshots, config, `--call-results`,
+`--bearer-file`) are read up to 64 MiB (64 KiB for a bearer file); pipes
+such as `--from <(…)` or `/dev/stdin` work, and a UTF-8 BOM is ignored.
+
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
 for `Authorization: Bearer …` (stdio servers: `--env`; config files:
 `"headers"` with `${VAR}`). The token is never printed or written by any
@@ -352,6 +359,7 @@ catalog diff next to the code that caused it.
 ## Programmatic use
 
 ```ts
+import fs from 'node:fs/promises';
 import { capture, buildSnapshot, diffCatalogs, evaluate, parseSnapshot } from 'mcp-catalog-snap';
 
 const live = buildSnapshot(await capture({ kind: 'stdio', command: 'npx', args: ['-y', 'kronicle-lite', 'serve'] }));
