@@ -11,6 +11,7 @@
 import { writeFileSync } from 'node:fs';
 
 import type { Target } from './capture.js';
+import { UNSAFE_TEXT } from './safe-text.js';
 
 /** Header names whose values are credentials. */
 const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|api-key)$|token|secret|key|auth|session|password/i;
@@ -74,7 +75,7 @@ export function mdEscape(s: string): string {
 
 /** The escaping `mdCode` applies inside a code span. */
 export function mdCodeEscape(s: string): string {
-  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(/\|/g, '\\|')}\``;
+  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(UNSAFE_TEXT, '').replace(/\|/g, '\\|')}\``;
 }
 
 function b64Cores(s: string, alphabet: 'base64' | 'base64url'): string[] {

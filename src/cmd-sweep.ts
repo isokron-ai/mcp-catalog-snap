@@ -18,6 +18,7 @@ import type { Target } from './capture.js';
 import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED } from './commands.js';
 import { redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 import { renderSweepMarkdown } from './report-md.js';
+import { oneLine } from './safe-text.js';
 import { SnapshotIntegrityError } from './snapshot.js';
 import { runSweep, serializeReport, type SweepOptions, type SweepReport } from './sweep.js';
 import { REFERENCE_TOKENIZER, loadTokenizers } from './tokenize.js';
@@ -134,7 +135,7 @@ export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<nu
     }
     return EXIT_OK;
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
 }

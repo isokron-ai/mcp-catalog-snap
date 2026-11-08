@@ -224,6 +224,12 @@ and bytes, `$ref` expansion is memoized and cycle-guarded, walks stop at
 descriptions over the cap are flagged, strings over 1 MiB are measured but
 not scanned, tokenization is linear and exact, and markdown output escapes
 server text (entities included) and breaks autolinks and @-mentions.
+Every command prints server text (tool names, paths, server name, error
+messages) with control characters, line breaks and bidi controls written
+as escapes (`\n`, `\u001b`), so a name cannot start a line a CI runner
+reads as a workflow command (`::warning::`, `::add-mask::`), close the
+action's step-summary code fence, or drive the terminal; error messages
+are one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers (and
 credential-looking `--env` values of 8+ characters for stdio children) are

@@ -73,6 +73,16 @@ uses semantic versioning once past 0.x.
 
 ### Security
 
+- Server text printed to a terminal or CI log is neutralized. `check`
+  printed tool names and property paths raw: a name containing a newline
+  injected GitHub Actions workflow commands (`::warning::`,
+  `::add-mask::`) into the job log and could close the step-summary code
+  fence, and ESC/BEL sequences reached the terminal. Markdown code spans
+  passed ESC/BEL/NUL through, and server error messages went to stderr raw
+  and unbounded. Now names, paths, reasons and the snapshot header write
+  controls, line separators and bidi controls as escapes; markdown drops
+  them; every `error:` line is one line, escaped, at most 1,000 chars.
+
 - Live capture is bounded (every command that talks to a server): a list
   stops after 1,000 pages or 64 MiB across pages (a server that returned a
   fresh `nextCursor` forever hung every command with memory growing); one

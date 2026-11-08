@@ -13,6 +13,7 @@ import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js
 import { redact, redactingIO, targetSecrets } from './redact.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
+import { oneLine } from './safe-text.js';
 import { VERSION } from './version.js';
 
 const HELP = `mcp-catalog-snap ${VERSION} — snapshot an MCP server's tool catalog, fail CI on byte drift,
@@ -145,7 +146,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
   try {
     args = parseArgs(argv);
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return EXIT_ERROR;
   }
   if (bool(args.flags['version']) || args.cmd === '--version' || args.cmd === 'version') {
@@ -203,7 +204,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
         return EXIT_ERROR;
     }
   } catch (err) {
-    io.err(`error: ${redact((err as Error).message, secrets)}`);
+    io.err(`error: ${oneLine(redact((err as Error).message, secrets))}`);
     return EXIT_ERROR;
   }
 }
@@ -218,7 +219,7 @@ main(process.argv.slice(2), io).then(
     process.exitCode = code;
   },
   (err: unknown) => {
-    process.stderr.write(`error: ${(err as Error).message}\n`);
+    process.stderr.write(`error: ${oneLine((err as Error).message)}\n`);
     process.exitCode = EXIT_ERROR;
   },
 );

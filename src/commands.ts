@@ -28,6 +28,7 @@ import {
   snapshotSelfConsistent,
   type Snapshot,
 } from './snapshot.js';
+import { oneLine } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -143,7 +144,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    rawIo.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${oneLine((err as Error).message)}`);
     return EXIT_ERROR;
   }
   const io = scrubbed(rawIo, resolved.specs);
@@ -168,7 +169,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       }
     } catch (err) {
       failures++;
-      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${(err as Error).message}`);
+      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${oneLine((err as Error).message)}`);
     }
   }
   return failures > 0 ? EXIT_ERROR : EXIT_OK;
@@ -190,7 +191,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    rawIo.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${oneLine((err as Error).message)}`);
     return EXIT_ERROR;
   }
   const io = scrubbed(rawIo, resolved.specs);
@@ -248,7 +249,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         r.snapshotPath = err.path;
       }
       results.push(r);
-      if (!opts.json) io.err(`error: ${label}: ${(err as Error).message}`);
+      if (!opts.json) io.err(`error: ${label}: ${oneLine((err as Error).message)}`);
     }
   }
 
@@ -265,7 +266,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
     try {
       writeText(io, opts.reportFile, `${JSON.stringify(report, null, 2)}\n`);
     } catch (err) {
-      io.err(`error: cannot write report ${opts.reportFile}: ${(err as Error).message}`);
+      io.err(`error: cannot write report ${opts.reportFile}: ${oneLine((err as Error).message)}`);
       return EXIT_ERROR;
     }
   }
@@ -295,7 +296,7 @@ export function cmdDiff(aPath: string, bPath: string, opts: DiffOptions, io: IO)
     a = readVerifiedSnapshot(aPath);
     b = readVerifiedSnapshot(bPath);
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
   const diff = diffCatalogs(a.catalog, b.catalog);
@@ -339,7 +340,7 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     }
     return EXIT_OK;
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
 }
