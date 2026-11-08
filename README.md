@@ -137,8 +137,8 @@ stdout is the markdown summary (`--json` prints the JSON report instead).
 **What a number means.** Each tool gets two separate measures:
 
 - **model-visible**: what the model reads. The canonical JSON of only the
-  fields clients pass to the model: `name`, `title`, `description`,
-  `inputSchema`. **Budgets, the per-tool distribution, the histogram and
+  fields clients pass to the model: `name`, `description`, `inputSchema`
+  (Anthropic's tool definition: `name`, `description`, `input_schema`). **Budgets, the per-tool distribution, the histogram and
   the largest-tools ranking use this.**
 - **wire**: what crosses the wire. The canonical JSON of the whole
   `tools/list` entry, including `icons` (often base64 `data:` URIs),
@@ -151,8 +151,8 @@ stdout is the markdown summary (`--json` prints the JSON report instead).
 uses for permissions and UI (Anthropic's tool definition is `name`,
 `description`, `input_schema`). `--count-annotations` counts them as
 model-visible when your client does forward them; the report records the
-choice in `measurement.modelVisibleFields`. `title` is counted because some
-clients fold it into the definition; it is small. Both measures are
+choice in `measurement.modelVisibleFields`. `title` is a display name for
+UIs and is not counted (it is in the per-field breakdown and in wire). Both measures are
 reference texts: clients re-serialize definitions their own way.
 
 Every figure is catalog-wide: each tool counted once, as if the whole
@@ -163,7 +163,7 @@ count carries its tokenizer label.
 
 | measured | how |
 | --- | --- |
-| model-visible | `tools-list`: RFC 8785 canonical JSON of `{name, title, description, inputSchema}` (+ `annotations` with `--count-annotations`). Exec adapters: the `info <tool>` output text the wrapper returns |
+| model-visible | `tools-list`: RFC 8785 canonical JSON of `{name, description, inputSchema}` (+ `annotations` with `--count-annotations`). Exec adapters: the `info <tool>` output text the wrapper returns |
 | wire | `tools-list`: RFC 8785 canonical JSON of the whole `tools/list` entry. Exec adapters: the same `info` text |
 | fields | `name`, `title`, `description` (raw text), `inputSchema`, `outputSchema`, `annotations`, `icons`, `_meta` (canonical JSON), `other` (every remaining field together) |
 | views | exec adapters: unsummarized `info`, `info --json`, `schema` outputs |
