@@ -289,7 +289,7 @@ describe('untyped, escaped JSON, annotations, output duplication', () => {
   it('oversizeFinding and summarizeFindings', () => {
     expect(oversizeFinding('t', 100, 100, 'cl100k')).toBeNull();
     const f = oversizeFinding('t', 101, 100, 'cl100k')!;
-    expect(f.message).toBe('exposure is 101 cl100k tokens, over the 100-token budget');
+    expect(f.message).toBe('model-visible size is 101 cl100k tokens, over the 100-token budget');
     const s = summarizeFindings([f, { ...f, tool: 'u' }, { ...f, rule: 'enum-large', severity: 'warn' }]);
     expect(Object.keys(s)).toEqual(['enum-large', 'oversize-tool']);
     expect(s['oversize-tool']).toEqual({ count: 2, tools: 2, severity: { error: 0, warn: 2, info: 0 } });

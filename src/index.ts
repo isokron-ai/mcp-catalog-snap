@@ -105,11 +105,13 @@ export {
 export {
   ANALYZE_MAX_CHARS,
   CHOICE_LIST_EDGES,
+  DEFAULT_MAX_ICON_BYTES,
   RULES,
   analyzeCallResult,
   analyzeTool,
   compareFindings,
   dedupRefs,
+  iconFindings,
   oversizeFinding,
   summarizeFindings,
   type ChoiceList,
@@ -123,6 +125,8 @@ export {
   type UntypedStats,
 } from './findings.js';
 export {
+  MODEL_VISIBLE_FIELDS,
+  MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS,
   TOOL_FIELDS,
   addMeasures,
   contractFingerprint,
@@ -131,6 +135,7 @@ export {
   histogram,
   measure,
   measureTool,
+  modelVisibleText,
   orderedToolsFingerprint,
   percentile,
   type Distribution,

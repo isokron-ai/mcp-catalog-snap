@@ -29,6 +29,7 @@ const BOOLEAN = new Set([
   'no-write',
   'update',
   'anthropic',
+  'count-annotations',
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

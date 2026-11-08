@@ -36,6 +36,9 @@ export interface SweepCommandOptions {
   maxCatalogTokens?: number;
   enumMax?: number;
   maxDescriptionBytes?: number;
+  maxIconBytes?: number;
+  /** Count `annotations` as model-visible. */
+  countAnnotations?: boolean;
   anthropic?: boolean;
   anthropicModel?: string;
   callResults?: string;
@@ -104,6 +107,8 @@ export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<nu
     sweepOpts.budgets = budgets;
     if (opts.enumMax !== undefined) sweepOpts.findings!.enumMax = opts.enumMax;
     if (opts.maxDescriptionBytes !== undefined) sweepOpts.findings!.maxDescriptionBytes = opts.maxDescriptionBytes;
+    if (opts.maxIconBytes !== undefined) sweepOpts.findings!.maxIconBytes = opts.maxIconBytes;
+    if (opts.countAnnotations) sweepOpts.modelVisibleAnnotations = true;
     if (opts.callResults !== undefined) sweepOpts.callResults = readCallResults(opts.callResults);
 
     if (opts.anthropic) {

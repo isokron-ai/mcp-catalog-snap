@@ -29,7 +29,7 @@ describe('tools-list adapter (offline)', () => {
     expect(input.catalog.tools.map((t) => t.name)).toEqual(['issue-delete', 'item-get', 'report-create', 'run-query']);
     expect((input.orderedTools as { name: string }[]).map((t) => t.name)).toEqual(['report-create', 'issue-delete', 'run-query', 'item-get']);
     expect(input.notes[0]).toMatch(/tools only/);
-    expect(input.exposure.size).toBe(0);
+    expect(input.modelVisible.size).toBe(0);
   });
 
   it('accepts a bare array, a JSON-RPC response, and a snapshot; refuses a tampered snapshot', () => {
@@ -67,7 +67,7 @@ describe('exec adapter (offline dump)', () => {
     expect(input.adapter).toBe('posthog-exec');
     expect(input.server).toEqual({ name: 'exec-dump', version: null });
     expect(input.catalog.tools.map((t) => t.name)).toEqual(['issue-delete', 'report-create', 'run-query']);
-    expect(input.exposure.get('run-query')).toMatch(/^name: run-query\n/);
+    expect(input.modelVisible.get('run-query')).toMatch(/^name: run-query\n/);
     expect([...input.views.get('run-query')!.keys()]).toEqual(['infoFull', 'infoJson', 'schema']);
     const emb = input.embeddedSchemas.get('report-create')!;
     expect(emb.escaped.startsWith("'{")).toBe(true);
@@ -137,7 +137,7 @@ describe('exec adapter (live, in-memory)', () => {
       writeFileSync(join(dir, 'raw.jsonl'), serializeExecRecords(records));
       const again = await loadSweepInput({ adapter: 'posthog-exec', from: join(dir, 'raw.jsonl'), name: 'exec-demo' });
       expect(fingerprint(again.catalog)).toBe(fingerprint(input.catalog));
-      expect(again.exposure).toEqual(input.exposure);
+      expect(again.modelVisible).toEqual(input.modelVisible);
       expect(serializeExecRecords(records)).toBe(serializeExecRecords([...records].reverse().sort((a, b) => (a.name < b.name ? -1 : 1))));
     } finally {
       await session.close();
@@ -198,7 +198,7 @@ describe.runIf(RAW !== undefined && existsSync(RAW))('PostHog audit reproduction
     const sum = (f: (name: string) => number): number => input.catalog.tools.reduce((n, t) => n + f(t.name), 0);
     const got = {
       tools: input.catalog.tools.length,
-      info: sum((n) => tok(input.exposure.get(n)!)),
+      info: sum((n) => tok(input.modelVisible.get(n)!)),
       infoFull: sum((n) => tok(input.views.get(n)!.get('infoFull')!)),
       schema: sum((n) => tok(input.views.get(n)!.get('schema')!)),
       description: input.catalog.tools.reduce((n, t) => n + tok(t.description ?? ''), 0),

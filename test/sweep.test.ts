@@ -45,10 +45,10 @@ describe('runSweep', () => {
     expect(r.format).toBe(REPORT_FORMAT);
     expect(r.fingerprints.catalog).toBe(fingerprint(input.catalog));
     expect(r.measurement.tokenizers.map((t) => t.id)).toEqual(['cl100k', 'chars4']);
-    expect(r.measurement.scope).toMatch(/^catalog exposure/);
+    expect(r.measurement.scope).toMatch(/^catalog-wide/);
     expect(r.tools.map((t) => t.name)).toEqual(['issue-delete', 'item-get', 'report-create', 'run-query']);
-    expect(r.totals.exposure.bytes).toBe(r.tools.reduce((n, t) => n + t.exposure.bytes, 0));
-    expect(r.totals.exposure.tokens['chars4']).toBeGreaterThan(0);
+    expect(r.totals.modelVisible.bytes).toBe(r.tools.reduce((n, t) => n + t.modelVisible.bytes, 0));
+    expect(r.totals.modelVisible.tokens['chars4']).toBeGreaterThan(0);
     const rc = r.tools.find((t) => t.name === 'report-create')!;
     expect(rc.choiceLists).toEqual({ count: 3, largest: 25, over: 1 });
     expect(rc.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: null, openWorldHint: null });
@@ -79,27 +79,27 @@ describe('runSweep', () => {
   it('explicit budgets: per-tool and catalog, error severity, exceeded flag', async () => {
     const toks = await loadTokenizers(['cl100k']);
     const input = await loadSweepInput({ from: join(FIX, 'tools-list.json') });
-    const r = runSweep(input, { tokenizers: toks, budgets: { toolTokens: 100, catalogTokens: 500 } });
-    expect(r.budget).toMatchObject({ toolTokens: 100, catalogTokens: 500, exceeded: true, toolsOver: ['report-create', 'run-query'], catalogOver: true });
+    const r = runSweep(input, { tokenizers: toks, budgets: { toolTokens: 70, catalogTokens: 500 } });
+    expect(r.budget).toMatchObject({ toolTokens: 70, catalogTokens: 500, exceeded: true, toolsOver: ['report-create', 'run-query'], catalogOver: true });
     expect(r.findings.filter((f) => f.rule === 'oversize-tool').map((f) => [f.tool, f.severity])).toEqual([
       ['report-create', 'error'],
       ['run-query', 'error'],
     ]);
     expect(r.findings.find((f) => f.rule === 'oversize-catalog')).toMatchObject({ tool: null, severity: 'error' });
-    const advisory = runSweep(input, { tokenizers: toks, advisoryToolTokens: 100 });
+    const advisory = runSweep(input, { tokenizers: toks, advisoryToolTokens: 70 });
     expect(advisory.budget.exceeded).toBe(false);
     expect(advisory.findings.filter((f) => f.rule === 'oversize-tool').map((f) => f.severity)).toEqual(['warn', 'warn']);
   });
 
-  it('exec input: info exposure, views, embedded-schema escaped-json finding', async () => {
+  it('exec input: info as model-visible, views, embedded-schema escaped-json finding', async () => {
     const toks = await loadTokenizers(['cl100k']);
     const r = runSweep(await loadSweepInput({ adapter: 'posthog-exec', from: join(FIX, 'exec-dump.jsonl') }), { tokenizers: toks });
     expect(Object.keys(r.totals.views)).toEqual(['infoFull', 'infoJson', 'schema']);
     expect(r.totals.embeddedSchema!.tools).toBe(3);
-    const esc = r.findings.filter((f) => f.rule === 'escaped-json' && f.data?.['view'] === 'exposure');
+    const esc = r.findings.filter((f) => f.rule === 'escaped-json' && f.data?.['view'] === 'modelVisible');
     expect(esc.length).toBeGreaterThan(0);
     expect(esc[0]!.data!['escapedTokens']).toBeGreaterThan(esc[0]!.data!['plainTokens'] as number);
-    expect(r.totals.exposure.tokens['cl100k']).toBe(r.tools.reduce((n, t) => n + t.exposure.tokens['cl100k']!, 0));
+    expect(r.totals.modelVisible.tokens['cl100k']).toBe(r.tools.reduce((n, t) => n + t.modelVisible.tokens['cl100k']!, 0));
   });
 });
 
@@ -116,7 +116,7 @@ describe('markdown', () => {
     expect(md.replace(/`[^`\n]*`/g, '')).not.toContain('<img');
     expect(md).not.toMatch(/^# owned/m);
     const row = md.split('\n').find((l) => l.startsWith('| 1 |'))!;
-    expect(row.replace(/\\\|/g, '').split('|').length - 1).toBe(8);
+    expect(row.replace(/\\\|/g, '').split('|').length - 1).toBe(9);
   });
 });
 
@@ -184,7 +184,7 @@ describe('sweep CLI (black box)', () => {
   });
 
   it('exit codes: 4 budget, 3 tampered snapshot, 2 bad input; --json prints the report', () => {
-    const over = cli(['sweep', '--from', join(FIX, 'tools-list.json'), '--max-tool-tokens', '100', '--json']);
+    const over = cli(['sweep', '--from', join(FIX, 'tools-list.json'), '--max-tool-tokens', '70', '--json']);
     expect(over.code).toBe(EXIT_BUDGET);
     expect(JSON.parse(over.stdout).budget.exceeded).toBe(true);
     expect(over.stderr).toMatch(/budget exceeded: 2 tool\(s\) over/);

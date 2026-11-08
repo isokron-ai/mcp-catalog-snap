@@ -45,12 +45,14 @@ export const RULES = {
   'description-oversize': { severity: 'warn', summary: 'description longer than the cap (descriptions are untrusted text)' },
   'escaped-json': { severity: 'info', summary: 'JSON carried as an escaped string, paying escape overhead' },
   'untyped-node': { severity: 'info', summary: 'schema nodes that accept anything ({} / items: {} / opaque objects)' },
-  'oversize-tool': { severity: 'warn', summary: 'tool exposure is over the per-tool token budget' },
-  'oversize-catalog': { severity: 'error', summary: 'catalog exposure is over the catalog token budget' },
+  'oversize-tool': { severity: 'warn', summary: 'model-visible size of a tool is over the per-tool token budget' },
+  'oversize-catalog': { severity: 'error', summary: 'model-visible size of the catalog is over the catalog token budget' },
   'annotations-missing': { severity: 'info', summary: 'no readOnlyHint / destructiveHint annotation' },
   'annotation-contradiction': { severity: 'warn', summary: 'annotations contradict each other or the tool name' },
   'output-duplication-risk': { severity: 'info', summary: 'declares outputSchema: results may repeat structuredContent as text' },
   'structured-content-duplicated': { severity: 'warn', summary: 'observed result repeats structuredContent verbatim in a text block' },
+  'icon-data-uri-large': { severity: 'warn', summary: 'data: URI icon over the size cap, sent inline in every tools/list' },
+  'icon-data-uri-duplicated': { severity: 'warn', summary: 'the same data: URI icon is repeated across the catalog' },
 } as const satisfies Record<string, { severity: Severity; summary: string }>;
 
 export type RuleId = keyof typeof RULES;
@@ -79,11 +81,14 @@ export interface FindingsOptions {
   maxDescriptionBytes?: number;
   /** Deterministic per-tool work budget, in node visits + KiB canonicalized (default 2,000,000). */
   workBudget?: number;
+  /** A `data:` URI icon `src` over this many UTF-8 bytes gets an `icon-data-uri-large` finding (default 4096). */
+  maxIconBytes?: number;
   /** Reference tokenizer for $defs savings estimates (bytes only when absent). */
   tokenizer?: Tokenizer;
 }
 
-const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200, maxDescriptionBytes: 16_384, workBudget: 2_000_000 };
+const DEFAULTS = { enumMax: 20, subtreeMinBytes: 200, maxDescriptionBytes: 16_384, workBudget: 2_000_000, maxIconBytes: 4_096 };
+export const DEFAULT_MAX_ICON_BYTES = DEFAULTS.maxIconBytes;
 
 /** Strings longer than this (UTF-16 units) are never regex-scanned or JSON-parsed. */
 export const ANALYZE_MAX_CHARS = 1 << 20;
@@ -641,7 +646,7 @@ export function analyzeTool(tool: CatalogTool, opts: FindingsOptions = {}): Tool
 /* ------------------------------------------------------------------ */
 
 /** `oversize-tool` finding when `tokens` exceeds `budget`, else null. */
-export function oversizeFinding(tool: string, tokens: number, budget: number, tokenizerId: string, what = 'exposure'): Finding | null {
+export function oversizeFinding(tool: string, tokens: number, budget: number, tokenizerId: string, what = 'model-visible size'): Finding | null {
   if (tokens <= budget) return null;
   return finding('oversize-tool', tool, '', `${what} is ${tokens} ${tokenizerId} tokens, over the ${budget}-token budget`, {
     tokens,
@@ -673,6 +678,59 @@ export function analyzeCallResult(tool: string, result: unknown, tokenizer?: Tok
     return finding('structured-content-duplicated', tool, `/content/${i}`, `text block repeats structuredContent (${utf8Bytes(text)} bytes)`, data);
   }
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* icons                                                              */
+/* ------------------------------------------------------------------ */
+
+/** `data:` scheme, case-insensitive (RFC 3986 schemes are). Checks a 5-char prefix only, whatever the string's size. */
+function isDataUri(src: string): boolean {
+  return src.length >= 5 && src.slice(0, 5).toLowerCase() === 'data:';
+}
+
+/**
+ * Inline `data:` URI icons. Icons are never shown to the model, but they
+ * ride in every tools/list response: `icon-data-uri-large` per icon over
+ * `maxIconBytes`, and one catalog-level `icon-data-uri-duplicated` when the
+ * same data URI appears more than once (light/dark pairs of one image
+ * included). Malformed `icons` (not an array, entries without a string
+ * `src`) are skipped: they are data, and the schema findings are elsewhere.
+ */
+export function iconFindings(tools: readonly CatalogTool[], maxIconBytes: number = DEFAULTS.maxIconBytes): Finding[] {
+  const out: Finding[] = [];
+  const seen = new Map<string, number>();
+  let icons = 0;
+  let wasteBytes = 0;
+  for (const tool of tools) {
+    const list = Object.hasOwn(tool, 'icons') ? tool['icons'] : undefined;
+    if (!Array.isArray(list)) continue;
+    for (let i = 0; i < list.length; i++) {
+      const icon = list[i];
+      const src = isObj(icon) ? icon['src'] : undefined;
+      if (typeof src !== 'string' || !isDataUri(src)) continue;
+      const b = utf8Bytes(src);
+      icons++;
+      if (seen.has(src)) wasteBytes += b;
+      seen.set(src, (seen.get(src) ?? 0) + 1);
+      if (b > maxIconBytes) {
+        out.push(finding('icon-data-uri-large', tool.name, ['icons', i, 'src'], `data: URI icon is ${b} bytes, over the ${maxIconBytes}-byte cap`, { bytes: b, cap: maxIconBytes }));
+      }
+    }
+  }
+  if (icons > seen.size) {
+    const repeated = [...seen.values()].filter((c) => c > 1).length;
+    out.push(
+      finding(
+        'icon-data-uri-duplicated',
+        null,
+        '',
+        `${icons} data: URI icons, ${seen.size} unique: ${repeated} image(s) repeated, ${wasteBytes} bytes sent more than once per tools/list`,
+        { icons, unique: seen.size, repeated, wasteBytes },
+      ),
+    );
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
