@@ -10,8 +10,8 @@
  *   - `wire`: what crosses the wire, the canonical JSON of the whole
  *     tools/list entry (icons, `_meta`, `outputSchema` included).
  *   - `modelVisible`: what the model reads, the canonical JSON of only the
- *     fields clients pass to it (`name`, `title`, `description`,
- *     `inputSchema`; `annotations` only with `modelVisibleAnnotations`).
+ *     fields clients pass to it (`name`, `description`, `inputSchema`;
+ *     `annotations` only with `modelVisibleAnnotations`).
  * Budgets, histograms and rankings use `modelVisible`.
  *
  * Every figure is catalog-wide: each tool counted once, as if the whole

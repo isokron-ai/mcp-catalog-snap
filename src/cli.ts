@@ -13,7 +13,7 @@ import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js
 import { redact, redactingIO, targetSecrets } from './redact.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
-import { oneLine } from './safe-text.js';
+import { oneLine, terminalSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
 const HELP = `mcp-catalog-snap ${VERSION} — snapshot an MCP server's tool catalog, fail CI on byte drift,
@@ -40,6 +40,7 @@ Target options (snapshot / check / hash):
   --server NAME         only this configured server
   --dir DIR             snapshot directory (default .mcp-catalog, or snapshotDir from config)
   --timeout MS          per-request timeout (default 30000)
+  --timeout-total MS    deadline for each server's whole capture (default: none)
 
 check / diff options:
   --ignore-descriptions do not treat description-only changes as drift
@@ -62,7 +63,7 @@ sweep options:
   --budget-tokenizer ID tokenizer budgets and rankings use (default cl100k)
   --max-tool-tokens N   fail (exit 4) when any tool's model-visible size is over N tokens
   --max-catalog-tokens N  fail (exit 4) when the whole catalog's model-visible size is over N tokens
-  --count-annotations   count annotations as model-visible (default: name, title,
+  --count-annotations   count annotations as model-visible (default: name,
                         description, inputSchema only; wire size always counts everything)
   --enum-max N          enum size that triggers enum-large (default 20)
   --max-description-bytes N  description size that triggers description-oversize (default 16384)
@@ -99,6 +100,7 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
   set('adapter', str(args.flags['adapter']));
   set('name', str(args.flags['name']));
   set('timeoutMs', timeoutMs(args));
+  set('totalTimeoutMs', timeoutMs(args, 'timeout-total'));
   const toks = str(args.flags['tokenizers']);
   set('tokenizers', toks === undefined ? undefined : toks.split(',').map((t) => t.trim()).filter(Boolean));
   set('budgetTokenizer', str(args.flags['budget-tokenizer']));
@@ -119,11 +121,11 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
   return o;
 }
 
-function timeoutMs(args: ParsedArgs): number | undefined {
-  const t = str(args.flags['timeout']);
+function timeoutMs(args: ParsedArgs, key = 'timeout'): number | undefined {
+  const t = str(args.flags[key]);
   if (t === undefined) return undefined;
   const n = Number(t);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`--timeout expects a positive number of ms, got ${t}`);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--${key} expects a positive number of ms, got ${t}`);
   return n;
 }
 
@@ -170,6 +172,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
       ...optional('server', str(args.flags['server'])),
       ...optional('dir', str(args.flags['dir'])),
       ...optional('timeoutMs', timeoutMs(args)),
+      ...optional('totalTimeoutMs', timeoutMs(args, 'timeout-total')),
       quiet: bool(args.flags['quiet']),
     };
     switch (args.cmd) {
@@ -210,8 +213,9 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
 }
 
 const io: IO = {
-  out: (s) => process.stdout.write(`${s}\n`),
-  err: (s) => process.stderr.write(`${s}\n`),
+  // The output boundary: whatever a command printed, terminal-active characters and workflow-command / fence lines are neutralized here.
+  out: (s) => process.stdout.write(`${terminalSafe(s)}\n`),
+  err: (s) => process.stderr.write(`${terminalSafe(s)}\n`),
 };
 
 main(process.argv.slice(2), io).then(

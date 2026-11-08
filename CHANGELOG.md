@@ -11,7 +11,8 @@ uses semantic versioning once past 0.x.
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
   separate measures per tool and in totals: `wire` (canonical JSON of the
   whole `tools/list` entry, icons and `_meta` included) and `modelVisible`
-  (canonical JSON of `name`, `title`, `description`, `inputSchema`).
+  (canonical JSON of `name`, `description`, `inputSchema`; `title` is a
+  display name and is not counted).
   Budgets, `modelVisiblePerTool`, the `modelVisibleTokens` histogram and
   the largest-tools table use model-visible tokens. `annotations` are not
   model-visible unless `--count-annotations` is given;
@@ -91,8 +92,14 @@ uses semantic versioning once past 0.x.
   fence, and ESC/BEL sequences reached the terminal. Markdown code spans
   passed ESC/BEL/NUL through, and server error messages went to stderr raw
   and unbounded. Now names, paths, reasons and the snapshot header write
-  controls, line separators and bidi controls as escapes; markdown drops
-  them; every `error:` line is one line, escaped, at most 1,000 chars.
+  controls, line separators, bidi controls and invisible format characters
+  (U+00AD, U+061C, U+180E, U+200B–U+200F, U+2060–U+2064, U+2066–U+206F,
+  U+FEFF) as escapes; markdown drops them; every `error:` line is one
+  line, escaped, at most 1,000 chars. `check` also printed the live server
+  version raw (`server version: a -> b`). Every stdout/stderr line now
+  passes an output boundary (`terminalSafe`) that escapes terminal-active
+  characters and neutralizes lines starting with `::` or a code fence,
+  whatever the call site.
 
 - Live capture is bounded (every command that talks to a server): a list
   stops after 1,000 pages or 64 MiB across pages (a server that returned a
@@ -102,6 +109,8 @@ uses semantic versioning once past 0.x.
   Content-Length or while streaming, with the download cancelled; an
   oversize stdio message now says so instead of "Connection closed"; a live
   exec sweep refuses a `tools` listing of more than 2,000 names.
+  `--timeout-total MS` (snapshot, check, hash, sweep) bounds a whole
+  capture; on expiry the child or connection is closed.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

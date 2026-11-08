@@ -137,8 +137,8 @@ stdout is the markdown summary (`--json` prints the JSON report instead).
 **What a number means.** Each tool gets two separate measures:
 
 - **model-visible**: what the model reads. The canonical JSON of only the
-  fields clients pass to the model: `name`, `title`, `description`,
-  `inputSchema`. **Budgets, the per-tool distribution, the histogram and
+  fields clients pass to the model: `name`, `description`, `inputSchema`
+  (Anthropic's tool definition: `name`, `description`, `input_schema`). **Budgets, the per-tool distribution, the histogram and
   the largest-tools ranking use this.**
 - **wire**: what crosses the wire. The canonical JSON of the whole
   `tools/list` entry, including `icons` (often base64 `data:` URIs),
@@ -151,8 +151,8 @@ stdout is the markdown summary (`--json` prints the JSON report instead).
 uses for permissions and UI (Anthropic's tool definition is `name`,
 `description`, `input_schema`). `--count-annotations` counts them as
 model-visible when your client does forward them; the report records the
-choice in `measurement.modelVisibleFields`. `title` is counted because some
-clients fold it into the definition; it is small. Both measures are
+choice in `measurement.modelVisibleFields`. `title` is a display name for
+UIs and is not counted (it is in the per-field breakdown and in wire). Both measures are
 reference texts: clients re-serialize definitions their own way.
 
 Every figure is catalog-wide: each tool counted once, as if the whole
@@ -163,7 +163,7 @@ count carries its tokenizer label.
 
 | measured | how |
 | --- | --- |
-| model-visible | `tools-list`: RFC 8785 canonical JSON of `{name, title, description, inputSchema}` (+ `annotations` with `--count-annotations`). Exec adapters: the `info <tool>` output text the wrapper returns |
+| model-visible | `tools-list`: RFC 8785 canonical JSON of `{name, description, inputSchema}` (+ `annotations` with `--count-annotations`). Exec adapters: the `info <tool>` output text the wrapper returns |
 | wire | `tools-list`: RFC 8785 canonical JSON of the whole `tools/list` entry. Exec adapters: the same `info` text |
 | fields | `name`, `title`, `description` (raw text), `inputSchema`, `outputSchema`, `annotations`, `icons`, `_meta` (canonical JSON), `other` (every remaining field together) |
 | views | exec adapters: unsummarized `info`, `info --json`, `schema` outputs |
@@ -224,12 +224,16 @@ and bytes, `$ref` expansion is memoized and cycle-guarded, walks stop at
 descriptions over the cap are flagged, strings over 1 MiB are measured but
 not scanned, tokenization is linear and exact, and markdown output escapes
 server text (entities included) and breaks autolinks and @-mentions.
-Every command prints server text (tool names, paths, server name, error
-messages) with control characters, line breaks and bidi controls written
-as escapes (`\n`, `\u001b`), so a name cannot start a line a CI runner
-reads as a workflow command (`::warning::`, `::add-mask::`), close the
-action's step-summary code fence, or drive the terminal; error messages
-are one line of at most 1,000 characters.
+Every command prints server text (tool names, paths, server name and
+version, error messages) with control characters, line breaks, bidi
+controls and invisible format characters (zero-width, word joiner, soft
+hyphen, BOM) written as escapes (`\n`, `\u001b`, `\u200b`); markdown
+drops them. On top of that, every line the CLI prints passes one output
+boundary: terminal-active characters become escapes and a line that would
+start with a workflow command (`::`) or a code fence gets a leading `\`, so
+no server string (or snapshot file name) can inject into a CI log, close
+the action's step-summary fence, or drive the terminal. Error messages are
+one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers, credential-named
 URL query values (`?api_key=`, `?token=`, …), credential-named stdio
@@ -392,8 +396,19 @@ servers, checked in this repo's own CI:
 - Capture is bounded because the server is untrusted: one message (stdio
   line or HTTP response body) may be at most 10 MiB, one list at most 1,000
   pages and 64 MiB across them, and every request times out (`--timeout`,
-  default 30 s). A live exec sweep queries at most 2,000 listed names.
+  default 30 s). `--timeout-total MS` bounds each server's whole capture
+  (default: none, so a slow but valid server can take up to pages ×
+  `--timeout`). A live exec sweep queries at most 2,000 listed names.
   Past a cap the command fails with exit 2 and says which cap it hit.
+
+  | cap | value |
+  | --- | --- |
+  | one server message (stdio line / HTTP body) | 10 MiB |
+  | pages per list | 1,000 |
+  | one list across pages | 64 MiB |
+  | per request | `--timeout`, default 30,000 ms |
+  | whole capture | `--timeout-total`, default none |
+  | live exec names | 2,000 |
 - Pagination is followed to exhaustion (within those caps), but a server that emits a
   non-deterministic order across pages still ends up sorted, so order
   changes are invisible by design (clients do not promise to preserve order
