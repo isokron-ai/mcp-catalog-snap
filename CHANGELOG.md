@@ -73,6 +73,15 @@ uses semantic versioning once past 0.x.
 
 ### Security
 
+- Live capture is bounded (every command that talks to a server): a list
+  stops after 1,000 pages or 64 MiB across pages (a server that returned a
+  fresh `nextCursor` forever hung every command with memory growing); one
+  message may be at most 10 MiB on Streamable HTTP too (bodies were
+  unbounded: an endless response grew ~140 MB/s until the timeout), cut by
+  Content-Length or while streaming, with the download cancelled; an
+  oversize stdio message now says so instead of "Connection closed"; a live
+  exec sweep refuses a `tools` listing of more than 2,000 names.
+
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a
   step budget (one step per comparison) and a byte budget (each value

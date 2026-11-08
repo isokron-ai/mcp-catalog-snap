@@ -230,6 +230,9 @@ function render(template: string, name: string): string {
 /** The wrapper answered with `isError`: the server rejected the command (e.g. an unknown name). */
 class ExecRejected extends Error {}
 
+/** Default cap on names from the `tools` listing: the server is untrusted and each name costs three calls. */
+export const MAX_EXEC_TOOLS = 2000;
+
 /** Names that may be interpolated into a command string: no spaces, quotes, separators or control characters. */
 export const EXEC_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -248,6 +251,8 @@ export interface LiveExecOptions extends CaptureOptions {
   profile: ExecProfile;
   /** Parallel `exec` calls (default 4). */
   concurrency?: number;
+  /** Most listed names this sweep will query (3 calls each; default MAX_EXEC_TOOLS). */
+  maxExecTools?: number;
   nameOverride?: string;
 }
 
@@ -261,6 +266,8 @@ export async function sweepInputFromExecServer(target: Target, opts: LiveExecOpt
   const session = await openSession(target, opts);
   try {
     return await sweepInputFromExecSession(session, opts, sourceOf(target));
+  } catch (err) {
+    throw session.explain(err);
   } finally {
     await session.close();
   }
@@ -287,6 +294,8 @@ export async function sweepInputFromExecSession(
   const listedNames = parseToolNames(await run(p.list));
   const invalid = listedNames.filter((n) => !EXEC_NAME.test(n));
   const names = listedNames.filter((n) => EXEC_NAME.test(n));
+  const maxTools = opts.maxExecTools ?? MAX_EXEC_TOOLS;
+  if (names.length > maxTools) throw new Error(`\`${p.list}\` listed ${names.length} names, more than the ${maxTools} this sweep will query`);
   const records: ExecRecord[] = [];
   const rejected: string[] = [];
   const failed: { name: string; message: string }[] = [];

@@ -379,7 +379,12 @@ servers, checked in this repo's own CI:
   capture tool, not a monitor.
 - Streamable HTTP only, for remote servers. The deprecated HTTP+SSE
   transport is not supported; put such servers behind a stdio bridge.
-- Pagination is followed to exhaustion, but a server that emits a
+- Capture is bounded because the server is untrusted: one message (stdio
+  line or HTTP response body) may be at most 10 MiB, one list at most 1,000
+  pages and 64 MiB across them, and every request times out (`--timeout`,
+  default 30 s). A live exec sweep queries at most 2,000 listed names.
+  Past a cap the command fails with exit 2 and says which cap it hit.
+- Pagination is followed to exhaustion (within those caps), but a server that emits a
   non-deterministic order across pages still ends up sorted, so order
   changes are invisible by design (clients do not promise to preserve order
   either).
