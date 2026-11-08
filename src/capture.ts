@@ -16,7 +16,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { basename } from 'node:path';
 
+import { safeUrl } from './redact.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
 
@@ -54,8 +56,13 @@ export interface CaptureOptions {
   stderr?: 'inherit' | 'ignore' | 'pipe';
 }
 
+/**
+ * A label for messages and reports that carries no credentials: the stdio
+ * command's basename (arguments elided, they may hold tokens), or the URL's
+ * origin and path (no query, no user:password@).
+ */
 export function describeTarget(t: Target): string {
-  return t.kind === 'stdio' ? [t.command, ...t.args].join(' ') : t.url;
+  return t.kind === 'stdio' ? `${basename(t.command)}${t.args.length > 0 ? ' …' : ''}` : safeUrl(t.url);
 }
 
 /** A server message over the size cap. */
@@ -116,7 +123,10 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
   try {
     url = new URL(target.url);
   } catch {
-    throw new Error(`invalid --url: ${target.url}`);
+    throw new Error('invalid --url (expected an absolute http(s) URL)');
+  }
+  if (url.username || url.password) {
+    throw new Error('--url must not carry user:password@ (send credentials with --bearer-file, --bearer-env or --header)');
   }
   const headers = target.headers ?? {};
   return new StreamableHTTPClientTransport(url, {

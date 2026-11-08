@@ -27,7 +27,82 @@ export const MIN_SECRET = 8;
 
 export const REDACTED = '***';
 
-/** Secret values a target carries: credential header values (and the part after the scheme), credential env values. */
+/**
+ * A value that looks like a credential on its own (some servers put API
+ * keys in the URL path or take them as a bare argument): 16+ chars mixing
+ * letters and digits, or long hex.
+ */
+export function looksSecret(value: string): boolean {
+  const s = decodeSafe(value);
+  if (s.length < 16) return false;
+  if (/^[0-9a-f]{16,}$/i.test(s)) return true;
+  return /[A-Za-z]/.test(s) && /\d/.test(s) && /^[A-Za-z0-9_\-.~+=]+$/.test(s);
+}
+
+function decodeSafe(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * URL credentials: the password and credential-named query values. (Only
+ * names decide: these values also make a catalog that echoes them be
+ * refused, so a guess would refuse ordinary ids. Credential-looking path
+ * segments are masked wherever a URL is shown instead; see `safeUrl`.)
+ */
+function urlSecrets(url: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  if (u.password) out.push(u.password, decodeSafe(u.password));
+  for (const [k, v] of u.searchParams) if (CREDENTIAL_ENV.test(k)) out.push(v);
+  return out;
+}
+
+/** Stdio arguments of credential-named flags: `--token X`, `--api-key=X`. */
+function argSecrets(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = /^--?([A-Za-z0-9_.-]+)=(.+)$/.exec(a);
+    if (eq) {
+      if (CREDENTIAL_ENV.test(eq[1]!)) out.push(eq[2]!);
+    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a)) {
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        out.push(next);
+        i++;
+      }
+    }
+  }
+  return out;
+}
+
+/** A URL for display: origin and path only (no user:password@, no query), credential-looking path segments masked. */
+export function safeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname
+      .split('/')
+      .map((seg) => (looksSecret(seg) ? REDACTED : seg))
+      .join('/');
+    return `${u.origin}${path}`;
+  } catch {
+    return '<invalid url>';
+  }
+}
+
+/**
+ * Secret values a target carries: credential header values (and the part
+ * after the scheme), URL credentials, credential env values and arguments.
+ */
 export function targetSecrets(t: Target | undefined): string[] {
   const out: string[] = [];
   if (t?.kind === 'http') {
@@ -37,8 +112,10 @@ export function targetSecrets(t: Target | undefined): string[] {
       const m = /^\S+\s+(.+)$/.exec(v);
       if (m) out.push(m[1]!);
     }
+    out.push(...urlSecrets(t.url));
   } else if (t?.kind === 'stdio') {
     for (const [k, v] of Object.entries(t.env ?? {})) if (CREDENTIAL_ENV.test(k)) out.push(v);
+    out.push(...argSecrets(t.args));
   }
   return normalizeSecrets(out);
 }

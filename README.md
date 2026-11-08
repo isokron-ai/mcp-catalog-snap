@@ -231,15 +231,19 @@ reads as a workflow command (`::warning::`, `::add-mask::`), close the
 action's step-summary code fence, or drive the terminal; error messages
 are one line of at most 1,000 characters.
 
-**Credentials.** Bearer tokens and other credential headers (and
-credential-looking `--env` values of 8+ characters for stdio children) are
+**Credentials.** Bearer tokens and other credential headers, credential-named
+URL query values (`?api_key=`, `?token=`, …), credential-named stdio
+arguments (`--token X`, `--api-key=X`) and credential-looking `--env` values
+(all of 8+ characters) are
 scrubbed from the report and diff data before anything is formatted, and
 again from everything any command prints or writes, in raw, markdown,
 JSON-pointer, JSON, percent-encoded and base64 forms, including text the
 server echoes back. A catalog that embeds the request's credential is
 refused rather than written to a snapshot or raw dump. Credential headers
-shorter than 8 characters are refused. Report sources keep only the URL origin
-and path, with credential-looking path segments masked.
+shorter than 8 characters are refused, and so is a `--url` with
+`user:password@`. Report sources and every message label a target by URL
+origin and path (no query, credential-looking path segments masked) or by
+the stdio command's basename (arguments elided).
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.
