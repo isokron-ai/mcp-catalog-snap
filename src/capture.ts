@@ -18,6 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { basename } from 'node:path';
 
+import { canonicalJson } from './canonical.js';
 import { safeUrl } from './redact.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
@@ -162,7 +163,8 @@ async function listAll<T>(
   let bytes = 0;
   for (let pages = 1; ; pages++) {
     const res = await page(cursor);
-    bytes += JSON.stringify(res.items).length;
+    // canonicalJson is iterative: JSON.stringify overflows the stack on a few thousand levels of nesting
+    bytes += canonicalJson(res.items).length;
     if (bytes > maxBytes) throw new Error(`${what}: more than ${maxBytes} bytes across pages; refusing to buffer more`);
     out.push(...res.items);
     if (!res.nextCursor) break;

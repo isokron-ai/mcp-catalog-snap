@@ -62,6 +62,19 @@ describe('pagination caps', () => {
   });
 });
 
+describe('the byte count is iterative', () => {
+  it('captures a 20,000-level deep schema (JSON.stringify overflowed the stack here)', async () => {
+    let schema: Record<string, unknown> = { type: 'string' };
+    for (let i = 0; i < 20_000; i++) schema = { type: 'object', properties: { a: schema } };
+    const s = new Server({ name: 'deep', version: '1' }, { capabilities: { tools: {} } });
+    s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: 'deep', inputSchema: schema as { type: 'object' } }] }));
+    const [c, t] = InMemoryTransport.createLinkedPair();
+    await s.connect(t);
+    const raw = await captureFromTransport(c);
+    expect(raw.tools.map((x) => (x as { name: string }).name)).toEqual(['deep']);
+  });
+});
+
 describe('message size caps', () => {
   it('stdio: a message over the cap fails with the cap in the error, not just "Connection closed"', async () => {
     const t = { kind: 'stdio' as const, command: process.execPath, args: [HOSTILE], env: { MODE: 'big' } };
