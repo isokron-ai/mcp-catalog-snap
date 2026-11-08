@@ -11,7 +11,8 @@ uses semantic versioning once past 0.x.
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
   separate measures per tool and in totals: `wire` (canonical JSON of the
   whole `tools/list` entry, icons and `_meta` included) and `modelVisible`
-  (canonical JSON of `name`, `title`, `description`, `inputSchema`).
+  (canonical JSON of `name`, `description`, `inputSchema`; `title` is a
+  display name and is not counted).
   Budgets, `modelVisiblePerTool`, the `modelVisibleTokens` histogram and
   the largest-tools table use model-visible tokens. `annotations` are not
   model-visible unless `--count-annotations` is given;
@@ -91,6 +92,8 @@ uses semantic versioning once past 0.x.
   Content-Length or while streaming, with the download cancelled; an
   oversize stdio message now says so instead of "Connection closed"; a live
   exec sweep refuses a `tools` listing of more than 2,000 names.
+  `--timeout-total MS` (snapshot, check, hash, sweep) bounds a whole
+  capture; on expiry the child or connection is closed.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

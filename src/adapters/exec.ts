@@ -20,7 +20,7 @@
  */
 
 import { canonicalJson } from '../canonical.js';
-import { listCatalog, openSession, type CaptureOptions, type Session, type Target } from '../capture.js';
+import { listCatalog, openSession, withDeadline, type CaptureOptions, type Session, type Target } from '../capture.js';
 import type { Finding } from '../findings.js';
 import { allSubtrees, isObj } from '../schema-walk.js';
 import { normalizeCatalog, type CatalogTool } from '../snapshot.js';
@@ -263,14 +263,21 @@ export interface LiveExecOptions extends CaptureOptions {
  * only; never `call`.
  */
 export async function sweepInputFromExecServer(target: Target, opts: LiveExecOptions): Promise<{ input: SweepInput; records: ExecRecord[] }> {
-  const session = await openSession(target, opts);
-  try {
-    return await sweepInputFromExecSession(session, opts, sourceOf(target));
-  } catch (err) {
-    throw session.explain(err);
-  } finally {
-    await session.close();
-  }
+  let session: Session | undefined;
+  return withDeadline(
+    opts.totalTimeoutMs,
+    () => session?.close(),
+    async () => {
+      session = await openSession(target, opts);
+      try {
+        return await sweepInputFromExecSession(session, opts, sourceOf(target));
+      } catch (err) {
+        throw session.explain(err);
+      } finally {
+        await session.close();
+      }
+    },
+  );
 }
 
 /** Same as sweepInputFromExecServer over an already-open session (caller closes it). */
