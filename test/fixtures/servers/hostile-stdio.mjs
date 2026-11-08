@@ -17,7 +17,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (msg.id === undefined) return;
   if (msg.method === 'initialize') {
-    out({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: `hostile-${MODE}`, version: '1' } } });
+    // HOSTILE_INFO=1: server name, version and title carry a newline + workflow command, ESC and an open code fence
+    const evil = 'x\n::error::PWNED\u001b[31m```';
+    const info = process.env.HOSTILE_INFO
+      ? { name: `hostile-${MODE}${evil}`, version: `2${evil}`, title: evil }
+      : { name: `hostile-${MODE}`, version: '1' };
+    out({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: info, instructions: evil } });
   } else if (msg.method === 'tools/list' && MODE === 'names') {
     const tools = [{ name: 'ok', inputSchema: { type: 'object' } }];
     if (process.env.ADD) {

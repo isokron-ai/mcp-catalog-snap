@@ -13,7 +13,7 @@ import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js
 import { redact, redactingIO, targetSecrets } from './redact.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
-import { oneLine } from './safe-text.js';
+import { oneLine, terminalSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
 const HELP = `mcp-catalog-snap ${VERSION} — snapshot an MCP server's tool catalog, fail CI on byte drift,
@@ -213,8 +213,9 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
 }
 
 const io: IO = {
-  out: (s) => process.stdout.write(`${s}\n`),
-  err: (s) => process.stderr.write(`${s}\n`),
+  // The output boundary: whatever a command printed, terminal-active characters and workflow-command / fence lines are neutralized here.
+  out: (s) => process.stdout.write(`${terminalSafe(s)}\n`),
+  err: (s) => process.stderr.write(`${terminalSafe(s)}\n`),
 };
 
 main(process.argv.slice(2), io).then(

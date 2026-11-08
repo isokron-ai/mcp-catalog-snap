@@ -28,7 +28,7 @@ import {
   snapshotSelfConsistent,
   type Snapshot,
 } from './snapshot.js';
-import { oneLine } from './safe-text.js';
+import { oneLine, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -231,9 +231,9 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         verdict,
       });
       if (!opts.json) {
-        io.out(`== ${name} (${path})`);
+        io.out(`== ${visible(name)} (${visible(path)})`);
         if (stored.server.version !== live.server.version) {
-          io.out(`server version: ${stored.server.version} -> ${live.server.version}`);
+          io.out(`server version: ${visible(stored.server.version)} -> ${visible(live.server.version)}`);
         }
         io.out(renderDiff(diff, verdict));
         io.out('');
@@ -339,7 +339,7 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     for (const spec of resolved.specs) {
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
-      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${spec.name || raw.server.name}` : snap.sha256);
+      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${visible(spec.name || raw.server.name)}` : snap.sha256);
     }
     return EXIT_OK;
   } catch (err) {
