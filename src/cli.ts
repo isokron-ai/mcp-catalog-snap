@@ -61,7 +61,7 @@ sweep options:
   --budget-tokenizer ID tokenizer budgets and rankings use (default cl100k)
   --max-tool-tokens N   fail (exit 4) when any tool's model-visible size is over N tokens
   --max-catalog-tokens N  fail (exit 4) when the whole catalog's model-visible size is over N tokens
-  --count-annotations   count annotations as model-visible (default: name, title,
+  --count-annotations   count annotations as model-visible (default: name,
                         description, inputSchema only; wire size always counts everything)
   --enum-max N          enum size that triggers enum-large (default 20)
   --max-description-bytes N  description size that triggers description-oversize (default 16384)
