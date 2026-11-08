@@ -123,6 +123,9 @@ describe('wire vs model-visible (github-mcp-server v2.1.0 fixture)', () => {
     for (const t of r.tools) expect(t.modelVisible).toEqual(t.wire);
     expect(r.measurement.modelVisibleFields).toBeNull();
     expect(r.measurement.modelVisible).toMatch(/info/);
+    const md = renderSweepMarkdown(r);
+    expect(md).toMatch(/\*\*Model-visible\*\* and \*\*wire\*\* are both the adapter's per-tool text/);
+    expect(md).not.toMatch(/whole tools\/list entry \(icons/);
   });
 });
 

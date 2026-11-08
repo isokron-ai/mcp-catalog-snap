@@ -53,8 +53,11 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
 
   L.push(`# MCP static sweep: ${mdText(r.server.name)}${r.server.version ? ` ${mdText(r.server.version)}` : ''}`);
   L.push('');
+  const fields = r.measurement.modelVisibleFields;
   L.push(
-    `> **Model-visible** = what the model reads (${r.measurement.modelVisibleFields ? r.measurement.modelVisibleFields.map((f) => `\`${f}\``).join(', ') : 'the adapter text below'}); **wire** = the whole tools/list entry (icons, \`_meta\` and \`outputSchema\` included), which clients do not pass to the model. Budgets apply to model-visible tokens. Every tool is counted once, as if the full catalog were loaded: not session or task exposure.`,
+    fields
+      ? `> **Model-visible** = what the model reads (${fields.map((f) => `\`${f}\``).join(', ')}); **wire** = the whole tools/list entry (icons, \`_meta\` and \`outputSchema\` included), which clients do not pass to the model. Budgets apply to model-visible tokens. Every tool is counted once, as if the full catalog were loaded: not session or task exposure.`
+      : `> **Model-visible** and **wire** are both the adapter's per-tool text (see "measured as" below). Budgets apply to model-visible tokens. Every tool is counted once, as if the full catalog were loaded: not session or task exposure.`,
   );
   for (const t of r.measurement.tokenizers) L.push(`> \`${t.id}\`: ${mdText(t.label, 200)}.`);
   L.push('');
