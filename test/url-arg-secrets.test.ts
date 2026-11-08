@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { describeTarget } from '../src/capture.js';
 import { targetSecrets } from '../src/redact.js';
+import { oneLine, scrubUrls } from '../src/safe-text.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const CANARY = `CANARY_SK_${Math.random().toString(36).slice(2)}x9`;
@@ -75,10 +76,50 @@ describe('targetSecrets / describeTarget', () => {
   });
 
   it('labels targets without query, userinfo or arguments', () => {
-    expect(describeTarget({ kind: 'http', url: `https://u:p@h:8443/mcp?key=${CANARY}` })).toBe('https://h:8443/mcp');
+    expect(describeTarget({ kind: 'http', url: `https://u:p@h:8443/mcp?key=${CANARY}` })).toBe('https://h:8443/mcp [query redacted]');
+    expect(describeTarget({ kind: 'http', url: 'https://h/mcp' })).toBe('https://h/mcp');
     expect(describeTarget({ kind: 'http', url: `https://h/mcp/${CANARY}A1/x` })).toBe('https://h/mcp/***/x');
     expect(describeTarget({ kind: 'stdio', command: '/usr/local/bin/srv', args: ['--token', CANARY] })).toBe('srv …');
     expect(describeTarget({ kind: 'stdio', command: 'srv', args: [] })).toBe('srv');
+  });
+});
+
+describe('URLs inside error text', () => {
+  it('scrubUrls() keeps origin + masked path and drops every query', () => {
+    expect(scrubUrls(`POST https://h/mcp/${CANARY}A1?X-Amz-Signature=${CANARY}&x=1 failed; see http://docs.example/a?b=c.`)).toBe(
+      'POST https://h/mcp/***?[query redacted] failed; see http://docs.example/a?[query redacted].',
+    );
+    expect(oneLine(`fetch https://h/x?jwt=${CANARY}`)).not.toContain(CANARY);
+  });
+
+  it('query values under signature-style names are secrets too', () => {
+    const s = targetSecrets({ kind: 'http', url: `https://h/mcp?sig=${CANARY}1&code=${CANARY}2&jwt=${CANARY}3&pat=${CANARY}4&X-Amz-Signature=${CANARY}5&X-Goog-Signature=${CANARY}6&X-Amz-Credential=${CANARY}7&encode=utf8utf8` });
+    for (let i = 1; i <= 7; i++) expect(s).toContain(`${CANARY}${i}`);
+    expect(s).not.toContain('utf8utf8');
+  });
+
+  it('CLI: a 4xx body that repeats the URL and the signature leaks nothing (sweep, snapshot, check --report)', async () => {
+    http = createServer(async (req, res) => {
+      for await (const _ of req) void _;
+      res.statusCode = 403;
+      res.end(`SignatureDoesNotMatch for http://${req.headers.host}${req.url} (sig ${new URL(req.url!, 'http://x').searchParams.get('X-Amz-Signature')})`);
+    });
+    await new Promise<void>((r) => http!.listen(0, '127.0.0.1', r));
+    const port = (http.address() as AddressInfo).port;
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-sec-'));
+    // three unrelated values: the signature (a named credential), a path key and a plain query value only URL scrubbing hides
+    const pathKey = `PATHKEY${Math.random().toString(36).slice(2)}9z`;
+    const nonce = `NONCE${Math.random().toString(36).slice(2)}`;
+    const url = `http://127.0.0.1:${port}/mcp/${pathKey}?X-Amz-Signature=${CANARY}&X-Amz-Date=20261108T000000Z&nonce=${nonce}`;
+    let all = '';
+    for (const cmd of [['sweep'], ['snapshot'], ['check', '--json', '--report', 'r.json']]) {
+      const r = await runAsync([...cmd, '--url', url, '--timeout', '5000'], dir);
+      expect(r.code, cmd.join(' ')).toBe(2);
+      all += r.all;
+    }
+    expect(all).toMatch(/SignatureDoesNotMatch/);
+    const seen = everything(dir, all);
+    for (const v of [CANARY, pathKey, nonce]) expect(seen).not.toContain(v);
   });
 });
 

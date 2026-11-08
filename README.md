@@ -236,7 +236,8 @@ the action's step-summary fence, or drive the terminal. Error messages are
 one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers, credential-named
-URL query values (`?api_key=`, `?token=`, …), credential-named stdio
+URL query values (`?api_key=`, `?token=`, `?sig=`, `X-Amz-Signature`,
+`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credential-named stdio
 arguments (`--token X`, `--api-key=X`) and credential-looking `--env` values
 (all of 8+ characters) are
 scrubbed from the report and diff data before anything is formatted, and
@@ -246,8 +247,10 @@ server echoes back. A catalog that embeds the request's credential is
 refused rather than written to a snapshot or raw dump. Credential headers
 shorter than 8 characters are refused, and so is a `--url` with
 `user:password@`. Report sources and every message label a target by URL
-origin and path (no query, credential-looking path segments masked) or by
-the stdio command's basename (arguments elided).
+origin and path (credential-looking path segments masked, any query shown
+only as `[query redacted]`) or by the stdio command's basename (arguments
+elided). URLs inside server and SDK error text are reduced the same way, so
+a 4xx body that repeats the request URL cannot echo its query.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.

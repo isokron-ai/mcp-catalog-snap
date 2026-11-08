@@ -83,7 +83,11 @@ uses semantic versioning once past 0.x.
   values and `--token`-style arguments join the scrubbed secrets (so a
   server echoing them is refused for snapshots and scrubbed elsewhere); a
   `--url` with `user:password@` is refused up front (fetch rejected it
-  anyway, quoting the password).
+  anyway, quoting the password). Query strings are never echoed: labels,
+  report sources and every URL inside error text (a 4xx body repeating the
+  request URL) show origin + masked path + `[query redacted]`; signed-URL
+  and OAuth names (`sig`, `X-Amz-Signature`, `X-Goog-Credential`, `code`,
+  `jwt`, `pat`, …) are scrubbed credentials.
 
 - Server text printed to a terminal or CI log is neutralized. `check`
   printed tool names and property paths raw: a name containing a newline

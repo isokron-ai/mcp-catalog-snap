@@ -49,7 +49,7 @@ describe('tools-list adapter (offline)', () => {
   });
 
   it('sourceOf never carries credentials: URL origin+path only, stdio basename only', () => {
-    expect(sourceOf({ kind: 'http', url: 'https://user:pw@mcp.example.com/mcp?token=abc#x' })).toEqual({ kind: 'http', url: 'https://mcp.example.com/mcp' });
+    expect(sourceOf({ kind: 'http', url: 'https://user:pw@mcp.example.com/mcp?token=abc#x' })).toEqual({ kind: 'http', url: 'https://mcp.example.com/mcp [query redacted]' });
     expect(sourceOf({ kind: 'stdio', command: '/usr/local/bin/server', args: ['--api-key', 'secret'] })).toEqual({ kind: 'stdio', command: 'server' });
   });
 
