@@ -6,8 +6,8 @@
  *     entry, i.e. exactly the bytes `fingerprint` hashes, icons and `_meta`
  *     included. This is what crosses the wire, not what the model reads.
  *   - `modelVisible`: JCS of only the fields clients pass to the model:
- *     `name`, `title`, `description`, `inputSchema` (and `annotations` when
- *     asked). Clients re-serialize tool definitions in their own way, so
+ *     `name`, `description`, `inputSchema` (and `annotations` when asked).
+ *     `title` is a display name and is not counted. Clients re-serialize tool definitions in their own way, so
  *     both are stable reference texts, not the literal prompt bytes of any
  *     one client.
  *   - per field: `name`, `title`, `description` as their raw string value;
@@ -43,8 +43,8 @@ export interface Measure {
 export const TOOL_FIELDS = ['name', 'title', 'description', 'inputSchema', 'outputSchema', 'annotations', 'icons', '_meta', 'other'] as const;
 export type ToolField = (typeof TOOL_FIELDS)[number];
 
-/** Fields counted as model-visible: what clients pass to the model (Anthropic: name, description, input_schema). */
-export const MODEL_VISIBLE_FIELDS = ['name', 'title', 'description', 'inputSchema'] as const;
+/** Fields counted as model-visible: what clients pass to the model (Anthropic: name, description, input_schema). `title` is a display name. */
+export const MODEL_VISIBLE_FIELDS = ['name', 'description', 'inputSchema'] as const;
 /** `annotations` are client hints (permissions, UI); counted as model-visible only on request. */
 export const MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS = [...MODEL_VISIBLE_FIELDS, 'annotations'] as const;
 

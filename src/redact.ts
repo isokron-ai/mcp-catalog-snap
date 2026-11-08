@@ -11,12 +11,16 @@
 import { writeFileSync } from 'node:fs';
 
 import type { Target } from './capture.js';
-import { UNSAFE_TEXT } from './safe-text.js';
+import { UNSAFE_TEXT, decodeSafe, looksSecret, safeUrl } from './safe-text.js';
+
+export { looksSecret, safeUrl };
 
 /** Header names whose values are credentials. */
 const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|api-key)$|token|secret|key|auth|session|password/i;
 /** Env var names (stdio children) whose values are credentials. */
 const CREDENTIAL_ENV = /token|secret|key|auth|pass|cookie|session|credential/i;
+/** URL query parameter names whose values are credentials (signed-URL and OAuth styles included: sig, X-Amz-Signature, X-Goog-Credential, code, jwt, pat). */
+const CREDENTIAL_QUERY = /token|secret|key|auth|pass|cookie|session|credential|sig|jwt|bearer|^code$|^pat$/i;
 /**
  * Credentials shorter than this cannot be scrubbed without masking ordinary
  * text (and hex hashes), so a credential *header* shorter than this is
@@ -26,26 +30,6 @@ const CREDENTIAL_ENV = /token|secret|key|auth|pass|cookie|session|credential/i;
 export const MIN_SECRET = 8;
 
 export const REDACTED = '***';
-
-/**
- * A value that looks like a credential on its own (some servers put API
- * keys in the URL path or take them as a bare argument): 16+ chars mixing
- * letters and digits, or long hex.
- */
-export function looksSecret(value: string): boolean {
-  const s = decodeSafe(value);
-  if (s.length < 16) return false;
-  if (/^[0-9a-f]{16,}$/i.test(s)) return true;
-  return /[A-Za-z]/.test(s) && /\d/.test(s) && /^[A-Za-z0-9_\-.~+=]+$/.test(s);
-}
-
-function decodeSafe(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-}
 
 /**
  * URL credentials: the password and credential-named query values. (Only
@@ -62,7 +46,7 @@ function urlSecrets(url: string): string[] {
   }
   const out: string[] = [];
   if (u.password) out.push(u.password, decodeSafe(u.password));
-  for (const [k, v] of u.searchParams) if (CREDENTIAL_ENV.test(k)) out.push(v);
+  for (const [k, v] of u.searchParams) if (CREDENTIAL_QUERY.test(k)) out.push(v);
   return out;
 }
 
@@ -83,20 +67,6 @@ function argSecrets(args: readonly string[]): string[] {
     }
   }
   return out;
-}
-
-/** A URL for display: origin and path only (no user:password@, no query), credential-looking path segments masked. */
-export function safeUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const path = u.pathname
-      .split('/')
-      .map((seg) => (looksSecret(seg) ? REDACTED : seg))
-      .join('/');
-    return `${u.origin}${path}`;
-  } catch {
-    return '<invalid url>';
-  }
 }
 
 /**

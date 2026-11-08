@@ -29,7 +29,7 @@ import {
   type Snapshot,
 } from './snapshot.js';
 import { readInputText } from './read-input.js';
-import { oneLine } from './safe-text.js';
+import { oneLine, scrubUrls, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -58,6 +58,8 @@ export interface TargetSelection {
 
 export interface CommonOptions extends TargetSelection {
   timeoutMs?: number;
+  /** Deadline for each server's whole capture (--timeout-total). */
+  totalTimeoutMs?: number;
   json?: boolean;
   quiet?: boolean;
   /** Where the stdio child's stderr goes (default: inherit; --json implies ignore). */
@@ -121,6 +123,7 @@ function readVerifiedSnapshot(path: string): Snapshot {
 function captureOpts(o: CommonOptions): CaptureOptions {
   const c: CaptureOptions = {};
   if (o.timeoutMs !== undefined) c.timeoutMs = o.timeoutMs;
+  if (o.totalTimeoutMs !== undefined) c.totalTimeoutMs = o.totalTimeoutMs;
   // When emitting JSON, keep the child's stderr out of the way.
   c.stderr = o.childStderr ?? (o.json ? 'ignore' : 'inherit');
   return c;
@@ -229,9 +232,9 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         verdict,
       });
       if (!opts.json) {
-        io.out(`== ${name} (${path})`);
+        io.out(`== ${visible(name)} (${visible(path)})`);
         if (stored.server.version !== live.server.version) {
-          io.out(`server version: ${stored.server.version} -> ${live.server.version}`);
+          io.out(`server version: ${visible(stored.server.version)} -> ${visible(live.server.version)}`);
         }
         io.out(renderDiff(diff, verdict));
         io.out('');
@@ -244,7 +247,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       }
     } catch (err) {
       const tampered = err instanceof SnapshotIntegrityError;
-      const r: ServerResult = { server: label, ok: false, drift: false, error: (err as Error).message };
+      const r: ServerResult = { server: label, ok: false, drift: false, error: scrubUrls((err as Error).message) };
       if (tampered) {
         r.tampered = true;
         r.snapshotPath = err.path;
@@ -337,7 +340,7 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     for (const spec of resolved.specs) {
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
-      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${spec.name || raw.server.name}` : snap.sha256);
+      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${visible(spec.name || raw.server.name)}` : snap.sha256);
     }
     return EXIT_OK;
   } catch (err) {

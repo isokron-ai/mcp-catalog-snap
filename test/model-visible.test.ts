@@ -39,7 +39,7 @@ function cli(args: string[]) {
 }
 
 describe('wire vs model-visible (github-mcp-server v2.1.0 fixture)', () => {
-  it('measures wire as the whole entry and model-visible as name/title/description/inputSchema only', async () => {
+  it('measures wire as the whole entry and model-visible as name/description/inputSchema only', async () => {
     const toks = await loadTokenizers(['cl100k']);
     const r = runSweep(await loadSweepInput({ from: GH }), { tokenizers: toks });
     const byName = new Map(ghTools().map((t) => [t.name, t]));
@@ -54,11 +54,21 @@ describe('wire vs model-visible (github-mcp-server v2.1.0 fixture)', () => {
     expect(r.totals.modelVisible.tokens['cl100k']).toBe(r.tools.reduce((n, t) => n + t.modelVisible.tokens['cl100k']!, 0));
     // the icons are most of the wire tokens: model-visible is well under a third of it
     expect(r.totals.modelVisible.tokens['cl100k']! * 3).toBeLessThan(r.totals.wire.tokens['cl100k']!);
-    expect(r.measurement.modelVisibleFields).toEqual(['name', 'title', 'description', 'inputSchema']);
+    expect(r.measurement.modelVisibleFields).toEqual(['name', 'description', 'inputSchema']);
     expect(r.measurement.budgetsApplyTo).toBe('modelVisible');
     expect(r.measurement.wire).toMatch(/whole tools\/list entry/);
     expect(r.totals.modelVisiblePerTool.sum).toBe(r.totals.modelVisible.tokens['cl100k']);
     expect(r).not.toHaveProperty('totals.exposure');
+  });
+
+  it('title is not model-visible (Anthropic tool definitions carry name, description, input_schema)', async () => {
+    const toks = await loadTokenizers(['cl100k']);
+    const base = { name: 'a', description: 'd', inputSchema: { type: 'object' } };
+    const r1 = runSweep(parseToolsListFile(JSON.stringify({ tools: [base] }), 'x.json'), { tokenizers: toks });
+    const r2 = runSweep(parseToolsListFile(JSON.stringify({ tools: [{ ...base, title: 'A long human-readable title' }] }), 'x.json'), { tokenizers: toks });
+    expect(r2.tools[0]!.modelVisible).toEqual(r1.tools[0]!.modelVisible);
+    expect(r2.tools[0]!.wire.bytes).toBeGreaterThan(r1.tools[0]!.wire.bytes);
+    expect(r2.tools[0]!.fields.title).toBeDefined();
   });
 
   it('icons and _meta change wire but never model-visible', async () => {
@@ -92,7 +102,7 @@ describe('wire vs model-visible (github-mcp-server v2.1.0 fixture)', () => {
     const input = await loadSweepInput({ from: GH });
     const off = runSweep(input, { tokenizers: toks });
     const on = runSweep(input, { tokenizers: toks, modelVisibleAnnotations: true });
-    expect(on.measurement.modelVisibleFields).toEqual(['name', 'title', 'description', 'inputSchema', 'annotations']);
+    expect(on.measurement.modelVisibleFields).toEqual(['name', 'description', 'inputSchema', 'annotations']);
     const raw = ghTools()[0]!;
     const t = on.tools.find((x) => x.name === raw.name)!;
     expect(t.modelVisible.bytes).toBe(bytes(canonicalJson({ name: raw.name, description: raw['description'], inputSchema: raw['inputSchema'], annotations: raw['annotations'] })));

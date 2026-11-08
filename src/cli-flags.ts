@@ -6,7 +6,7 @@
 
 import { BOOLEAN, REPEATABLE, type ParsedArgs } from './args.js';
 
-const TARGET = ['url', 'header', 'bearer-file', 'bearer-env', 'env', 'cwd', 'timeout', 'name'];
+const TARGET = ['url', 'header', 'bearer-file', 'bearer-env', 'env', 'cwd', 'timeout', 'timeout-total', 'name'];
 const CONFIG = ['config', 'server', 'dir'];
 const ALWAYS = ['help', 'version'];
 

@@ -10,7 +10,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ import { diffCatalogs, evaluate } from '../src/diff.js';
 import { renderDiff, renderSnapshotHeader } from '../src/render.js';
 import { mdCode, mdText, renderSweepMarkdown } from '../src/report-md.js';
 import { buildSnapshot, normalizeCatalog } from '../src/snapshot.js';
-import { oneLine, visible } from '../src/safe-text.js';
+import { oneLine, terminalSafe, visible } from '../src/safe-text.js';
 import { runSweep } from '../src/sweep.js';
 import { loadTokenizers } from '../src/tokenize.js';
 
@@ -30,7 +30,7 @@ const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const HOSTILE = fileURLToPath(new URL('./fixtures/servers/hostile-stdio.mjs', import.meta.url));
 const EVIL = 'x\n::warning title=pwned::owned\n```\n\u001b]0;TITLE\u0007\u001b[2J\u202e\u0000\u0085\u2028';
 // eslint-disable-next-line no-control-regex -- the point is to find control characters
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u061c\u200e\u200f]/;
 
 /** No control characters, and no line a CI runner would read as a workflow command (it trims leading space). */
 function assertTerminalSafe(text: string): void {
@@ -48,6 +48,17 @@ describe('safe-text helpers', () => {
   it('visible() escapes control, C1, line-separator and bidi characters and keeps the rest', () => {
     expect(visible('a\nb\t\u001b[2J\u0000\u0085\u2028\u202eé😀')).toBe('a\\nb\\t\\u001b[2J\\u0000\\u0085\\u2028\\u202eé😀');
     expect(visible('plain text')).toBe('plain text');
+  });
+
+  it('invisible and format characters are covered: soft hyphen, ALM, MVS, ZWSP..RLM, word joiner.., bidi isolates, BOM', () => {
+    const codes = [0xad, 0x61c, 0x180e, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0x2061, 0x2064, 0x2066, 0x2067, 0x2068, 0x2069, 0x206a, 0x206f, 0xfeff];
+    for (const c of codes) {
+      const ch = String.fromCharCode(c);
+      const hex = c.toString(16).padStart(4, '0');
+      expect(visible(`a${ch}b`), hex).toBe(`a\\u${hex}b`);
+      expect(mdText(`a${ch}b`), hex).toBe('ab');
+      expect(mdCode(`a${ch}b`), hex).toBe('`ab`');
+    }
   });
 
   it('oneLine() joins lines, escapes the rest and caps the length', () => {
@@ -100,7 +111,99 @@ describe('sweep markdown', () => {
   });
 });
 
+describe('output boundary', () => {
+  it('terminalSafe() escapes terminal controls and neutralizes workflow-command and fence lines, keeping newlines', () => {
+    expect(terminalSafe('a\n  ::error::x\n```js\n~~~\n\u001b[2Jb\u202e\tc')).toBe('a\n  \\::error::x\n\\```js\n\\~~~\n\\u001b[2Jb\\u202e\tc');
+    expect(terminalSafe('{\n  "a": "\u2028"\n}')).toBe('{\n  "a": "\\u2028"\n}');
+    expect(terminalSafe('ok :: not at start')).toBe('ok :: not at start');
+  });
+});
+
 describe('CLI end to end (hostile stdio server)', () => {
+  it('check: a hostile server name/version cannot inject either (version line, header)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-term-'));
+    const srv = ['--', process.execPath, HOSTILE];
+    expect(cli(['snapshot', '--name', 'h', ...srv], dir, { MODE: 'names' }).code).toBe(0);
+    const r = cli(['check', '--name', 'h', ...srv], dir, { MODE: 'names', ADD: '1', HOSTILE_INFO: '1' });
+    expect(r.code).toBe(1);
+    assertTerminalSafe(r.stdout);
+    assertTerminalSafe(r.stderr);
+    expect(r.stdout).toContain('server version: 1 -> 2x\\n::error::PWNED\\u001b[31m```');
+    // no-name ad-hoc snapshot and multi-server hash print the server-reported name
+    const s = cli(['snapshot', '--no-write', ...srv], dir, { MODE: 'names', HOSTILE_INFO: '1' });
+    assertTerminalSafe(s.stdout);
+    writeFileSync(
+      join(dir, '.mcp-catalog.json'),
+      JSON.stringify({ servers: [1, 2].map((i) => ({ name: `s${i}`, command: [process.execPath, HOSTILE], env: { MODE: 'names', HOSTILE_INFO: '1' } })) }),
+    );
+    const h = cli(['hash'], dir);
+    expect(h.code).toBe(0);
+    assertTerminalSafe(h.stdout);
+    const sw = cli(['sweep', ...srv], dir, { MODE: 'names', HOSTILE_INFO: '1', ADD: '1' });
+    expect(sw.code).toBe(0);
+    assertTerminalSafe(sw.stdout);
+  });
+
+  it('the output boundary covers text no call site escapes (a snapshot file name from a PR checkout)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-term-'));
+    const srv = ['--', process.execPath, HOSTILE];
+    const s = cli(['snapshot', '--no-write', ...srv], dir, { MODE: 'names' });
+    expect(s.code).toBe(0);
+    const evilName = join(dir, 'a\n::warning::FROM-FILENAME\u001b[31m.json');
+    writeFileSync(evilName, s.stdout);
+    const r = cli(['diff', evilName, evilName], dir);
+    expect(r.code).toBe(0);
+    assertTerminalSafe(r.stdout);
+    expect(r.stdout).toContain('\\::warning::FROM-FILENAME\\u001b[31m');
+  });
+
+  it('GitHub Action step: job log and step summary stay inert', () => {
+    const action = readFileSync(fileURLToPath(new URL('../action.yml', import.meta.url)), 'utf8');
+    const step = action.slice(action.indexOf('id: check'));
+    const body = step.slice(step.indexOf('run: |') + 'run: |'.length).split('\n');
+    const lines: string[] = [];
+    for (const l of body.slice(1)) {
+      if (l.trim() !== '' && !l.startsWith('        ')) break; // end of the indented `run: |` block
+      lines.push(l.slice(8));
+    }
+    const script = lines.join('\n');
+    expect(script).toMatch(/GITHUB_STEP_SUMMARY/);
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-action-'));
+    const srv = [process.execPath, HOSTILE];
+    writeFileSync(join(dir, '.mcp-catalog.json'), JSON.stringify({ servers: [{ name: 'h', command: srv, env: { MODE: 'names' } }] }));
+    expect(cli(['snapshot'], dir).code).toBe(0);
+    writeFileSync(join(dir, '.mcp-catalog.json'), JSON.stringify({ servers: [{ name: 'h', command: srv, env: { MODE: 'names', ADD: '1', HOSTILE_INFO: '1' } }] }));
+    const summary = join(dir, 'summary.md');
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      cwd: dir,
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        HOME: dir,
+        GITHUB_ACTION_PATH: fileURLToPath(new URL('..', import.meta.url)),
+        GITHUB_OUTPUT: join(dir, 'out.txt'),
+        GITHUB_STEP_SUMMARY: summary,
+        RUNNER_TEMP: dir,
+        INPUT_CONFIG: '.mcp-catalog.json',
+        INPUT_IGNORE_DESCRIPTIONS: 'false',
+        INPUT_ALLOW_ADDITIONS: 'false',
+        INPUT_SERVER: '',
+        INPUT_TIMEOUT: '30000',
+      },
+    });
+    expect(r.status).toBe(1);
+    const log = `${r.stdout}\n${r.stderr}`;
+    expect(log).not.toMatch(CONTROL);
+    // the only workflow command in the log is the action's own
+    expect(log.split('\n').filter((l) => l.trimStart().startsWith('::'))).toEqual([
+      '::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)',
+    ]);
+    const md = readFileSync(summary, 'utf8');
+    expect(md).not.toMatch(CONTROL);
+    // exactly the action's own fence pair
+    expect(md.split('\n').filter((l) => /^ {0,3}(```|~~~)/.test(l))).toEqual(['```', '```']);
+  });
+
   it('check: a hostile added tool cannot inject workflow commands or escapes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcs-term-'));
     const srv = ['--', process.execPath, HOSTILE];
