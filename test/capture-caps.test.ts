@@ -11,6 +11,10 @@
 
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -24,6 +28,7 @@ import { POSTHOG_EXEC } from '../src/adapters/index.js';
 import { sweepInputFromExecSession } from '../src/adapters/exec.js';
 import { MAX_PAGES, capture, captureFromTransport, openSessionOnTransport } from '../src/capture.js';
 
+const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const HOSTILE = fileURLToPath(new URL('./fixtures/servers/hostile-stdio.mjs', import.meta.url));
 
 const served = { pages: 0 };
@@ -72,6 +77,29 @@ describe('the byte count is iterative', () => {
     await s.connect(t);
     const raw = await captureFromTransport(c);
     expect(raw.tools.map((x) => (x as { name: string }).name)).toEqual(['deep']);
+  });
+});
+
+describe('overall deadline (--timeout-total)', () => {
+  it('stops a capture whose every request is within --timeout but which never ends', async () => {
+    const t = { kind: 'stdio' as const, command: process.execPath, args: [HOSTILE], env: { MODE: 'slowpages' } };
+    const t0 = Date.now();
+    await expect(capture(t, { totalTimeoutMs: 1500, stderr: 'ignore' })).rejects.toThrow(/did not finish within 1500 ms \(--timeout-total\)/);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+  });
+
+  it('CLI: snapshot and sweep take --timeout-total', () => {
+    for (const cmd of ['snapshot', 'sweep']) {
+      const t0 = Date.now();
+      const r = spawnSync(process.execPath, [CLI, cmd, '--timeout-total', '1500', '--', process.execPath, HOSTILE], {
+        encoding: 'utf8',
+        env: { PATH: process.env['PATH'] ?? '', MODE: 'slowpages' },
+        cwd: mkdtempSync(join(tmpdir(), 'mcs-dl-')),
+      });
+      expect(r.status, cmd).toBe(2);
+      expect(r.stderr, cmd).toMatch(/did not finish within 1500 ms/);
+      expect(Date.now() - t0).toBeLessThan(8_000);
+    }
   });
 });
 

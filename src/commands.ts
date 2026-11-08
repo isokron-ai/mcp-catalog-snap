@@ -56,6 +56,8 @@ export interface TargetSelection {
 
 export interface CommonOptions extends TargetSelection {
   timeoutMs?: number;
+  /** Deadline for each server's whole capture (--timeout-total). */
+  totalTimeoutMs?: number;
   json?: boolean;
   quiet?: boolean;
   /** Where the stdio child's stderr goes (default: inherit; --json implies ignore). */
@@ -119,6 +121,7 @@ function readVerifiedSnapshot(path: string): Snapshot {
 function captureOpts(o: CommonOptions): CaptureOptions {
   const c: CaptureOptions = {};
   if (o.timeoutMs !== undefined) c.timeoutMs = o.timeoutMs;
+  if (o.totalTimeoutMs !== undefined) c.totalTimeoutMs = o.totalTimeoutMs;
   // When emitting JSON, keep the child's stderr out of the way.
   c.stderr = o.childStderr ?? (o.json ? 'ignore' : 'inherit');
   return c;

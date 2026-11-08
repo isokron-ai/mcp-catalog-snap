@@ -39,6 +39,7 @@ Target options (snapshot / check / hash):
   --server NAME         only this configured server
   --dir DIR             snapshot directory (default .mcp-catalog, or snapshotDir from config)
   --timeout MS          per-request timeout (default 30000)
+  --timeout-total MS    deadline for each server's whole capture (default: none)
 
 check / diff options:
   --ignore-descriptions do not treat description-only changes as drift
@@ -98,6 +99,7 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
   set('adapter', str(args.flags['adapter']));
   set('name', str(args.flags['name']));
   set('timeoutMs', timeoutMs(args));
+  set('totalTimeoutMs', timeoutMs(args, 'timeout-total'));
   const toks = str(args.flags['tokenizers']);
   set('tokenizers', toks === undefined ? undefined : toks.split(',').map((t) => t.trim()).filter(Boolean));
   set('budgetTokenizer', str(args.flags['budget-tokenizer']));
@@ -118,11 +120,11 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
   return o;
 }
 
-function timeoutMs(args: ParsedArgs): number | undefined {
-  const t = str(args.flags['timeout']);
+function timeoutMs(args: ParsedArgs, key = 'timeout'): number | undefined {
+  const t = str(args.flags[key]);
   if (t === undefined) return undefined;
   const n = Number(t);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`--timeout expects a positive number of ms, got ${t}`);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--${key} expects a positive number of ms, got ${t}`);
   return n;
 }
 
@@ -169,6 +171,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
       ...optional('server', str(args.flags['server'])),
       ...optional('dir', str(args.flags['dir'])),
       ...optional('timeoutMs', timeoutMs(args)),
+      ...optional('totalTimeoutMs', timeoutMs(args, 'timeout-total')),
       quiet: bool(args.flags['quiet']),
     };
     switch (args.cmd) {

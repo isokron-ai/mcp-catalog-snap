@@ -82,6 +82,8 @@ uses semantic versioning once past 0.x.
   Content-Length or while streaming, with the download cancelled; an
   oversize stdio message now says so instead of "Connection closed"; a live
   exec sweep refuses a `tools` listing of more than 2,000 names.
+  `--timeout-total MS` (snapshot, check, hash, sweep) bounds a whole
+  capture; on expiry the child or connection is closed.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

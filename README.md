@@ -382,8 +382,19 @@ servers, checked in this repo's own CI:
 - Capture is bounded because the server is untrusted: one message (stdio
   line or HTTP response body) may be at most 10 MiB, one list at most 1,000
   pages and 64 MiB across them, and every request times out (`--timeout`,
-  default 30 s). A live exec sweep queries at most 2,000 listed names.
+  default 30 s). `--timeout-total MS` bounds each server's whole capture
+  (default: none, so a slow but valid server can take up to pages ×
+  `--timeout`). A live exec sweep queries at most 2,000 listed names.
   Past a cap the command fails with exit 2 and says which cap it hit.
+
+  | cap | value |
+  | --- | --- |
+  | one server message (stdio line / HTTP body) | 10 MiB |
+  | pages per list | 1,000 |
+  | one list across pages | 64 MiB |
+  | per request | `--timeout`, default 30,000 ms |
+  | whole capture | `--timeout-total`, default none |
+  | live exec names | 2,000 |
 - Pagination is followed to exhaustion (within those caps), but a server that emits a
   non-deterministic order across pages still ends up sorted, so order
   changes are invisible by design (clients do not promise to preserve order

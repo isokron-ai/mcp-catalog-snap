@@ -51,12 +51,39 @@ export interface CaptureOptions {
   maxMessageBytes?: number;
   /** Largest list accepted across all its pages (default MAX_LIST_BYTES). */
   maxListBytes?: number;
+  /** Deadline for the whole capture, connect to last page, in ms (default: none; every request still has `timeoutMs`). */
+  totalTimeoutMs?: number;
   /** Where to send the child's stderr (stdio only). Default: inherit. */
   stderr?: 'inherit' | 'ignore' | 'pipe';
 }
 
 export function describeTarget(t: Target): string {
   return t.kind === 'stdio' ? [t.command, ...t.args].join(' ') : t.url;
+}
+
+/**
+ * Run `work` under an overall deadline. On expiry `onExpire` runs (it closes
+ * the transport, which ends the child process or connection) and the
+ * returned promise rejects.
+ */
+export async function withDeadline<T>(ms: number | undefined, onExpire: () => unknown, work: () => Promise<T>): Promise<T> {
+  if (ms === undefined) return work();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      Promise.resolve()
+        .then(onExpire)
+        .catch(() => undefined);
+      reject(new Error(`capture did not finish within ${ms} ms (--timeout-total)`));
+    }, ms);
+  });
+  const run = work();
+  run.catch(() => undefined);
+  try {
+    return await Promise.race([run, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** A server message over the size cap. */
@@ -257,14 +284,20 @@ export async function listCatalog(session: Session): Promise<RawCapture> {
 
 /** Capture using an already-constructed transport (tests use InMemoryTransport). */
 export async function captureFromTransport(rawTransport: Transport, opts: CaptureOptions = {}): Promise<RawCapture> {
-  const session = await openSessionOnTransport(rawTransport, opts);
-  try {
-    return await listCatalog(session);
-  } catch (err) {
-    throw session.explain(err);
-  } finally {
-    await session.close();
-  }
+  return withDeadline(
+    opts.totalTimeoutMs,
+    () => rawTransport.close(),
+    async () => {
+      const session = await openSessionOnTransport(rawTransport, opts);
+      try {
+        return await listCatalog(session);
+      } catch (err) {
+        throw session.explain(err);
+      } finally {
+        await session.close();
+      }
+    },
+  );
 }
 
 /** Capture by spawning / dialing the target. */
