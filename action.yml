@@ -33,6 +33,10 @@ inputs:
     description: 'Per-request timeout in milliseconds.'
     required: false
     default: '30000'
+  timeout-total-ms:
+    description: 'Deadline for each server''s whole capture in milliseconds (empty = none). On expiry the server''s process group is ended.'
+    required: false
+    default: ''
   node-version:
     description: 'Node.js version to set up for the CLI (needs >= 20).'
     required: false
@@ -72,12 +76,14 @@ runs:
         INPUT_ALLOW_ADDITIONS: ${{ inputs.allow-additions }}
         INPUT_SERVER: ${{ inputs.server }}
         INPUT_TIMEOUT: ${{ inputs.timeout-ms }}
+        INPUT_TIMEOUT_TOTAL: ${{ inputs.timeout-total-ms }}
       run: |
         set +e
         args=(check --config "$INPUT_CONFIG" --timeout "$INPUT_TIMEOUT")
         [ "$INPUT_IGNORE_DESCRIPTIONS" = "true" ] && args+=(--ignore-descriptions)
         [ "$INPUT_ALLOW_ADDITIONS" = "true" ] && args+=(--allow-additions)
         [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
+        [ -n "$INPUT_TIMEOUT_TOTAL" ] && args+=(--timeout-total "$INPUT_TIMEOUT_TOTAL")
 
         report="$RUNNER_TEMP/mcp-catalog-report.json"
         node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" | tee mcp-catalog-check.txt
