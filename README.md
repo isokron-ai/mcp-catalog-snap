@@ -254,9 +254,14 @@ refused rather than written to a snapshot or raw dump. Credential headers
 shorter than 8 characters are refused, and so is a `--url` with
 `user:password@`. Report sources and every message label a target by URL
 origin and path (credential-looking path segments masked, any query shown
-only as `[query redacted]`) or by the stdio command's basename (arguments
-elided). URLs inside server and SDK error text are reduced the same way, so
-a 4xx body that repeats the request URL cannot echo its query.
+only as `[query redacted]`) or by the stdio command's basename and arguments
+(`--token X`, `--api-key=X` and credential-looking values shown as `***`,
+URLs as origin + path; the sweep report's `source` keeps the basename
+only). URLs inside server and SDK error text are reduced the same way, and
+every `?k=v` value in error text is shown as `***` whatever its name, so a
+4xx body that repeats the request target (`/mcp?pwd=…`) cannot echo it.
+Argument errors (`--header`, `--env` without a separator) never show the
+value. `hash FILE` together with `--url` or `-- command` is an error.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.

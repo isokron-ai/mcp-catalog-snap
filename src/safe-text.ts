@@ -46,7 +46,7 @@ export const MAX_ERROR_CHARS = 1000;
 
 /** An error message as one visible line: URLs reduced to origin + path (`scrubUrls`), line breaks (with their indentation) become one space, the rest is escaped, then capped. */
 export function oneLine(s: string, max = MAX_ERROR_CHARS): string {
-  const v = visible(scrubUrls(s).replace(/[ \t]*\r?\n[ \t]*/g, ' '));
+  const v = visible(scrubErrorText(s).replace(/[ \t]*\r?\n[ \t]*/g, ' '));
   return v.length > max ? `${v.slice(0, max - 1)}…` : v;
 }
 
@@ -112,6 +112,16 @@ export function safeUrl(url: string, inline = false): string {
   } catch {
     return '<invalid url>';
   }
+}
+
+/**
+ * Error text from a server or the SDK, made safe to show: every http(s) URL
+ * reduced to `safeUrl` form, then the value of every remaining `?k=v` /
+ * `&k=v` pair (scheme-less request targets like `/mcp?pwd=…`, `host/x?q=…`)
+ * replaced by `***`, whatever the parameter is called.
+ */
+export function scrubErrorText(text: string): string {
+  return scrubUrls(text).replace(/([?&][^\s=&#?"'<>]+)=[^\s&#"'<>]*/g, '$1=***');
 }
 
 /** Every http(s) URL inside free text (server or SDK error messages) reduced to `safeUrl` form; trailing punctuation is kept. */

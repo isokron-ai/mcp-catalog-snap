@@ -87,7 +87,13 @@ uses semantic versioning once past 0.x.
   report sources and every URL inside error text (a 4xx body repeating the
   request URL) show origin + masked path + `[query redacted]`; signed-URL
   and OAuth names (`sig`, `X-Amz-Signature`, `X-Goog-Credential`, `code`,
-  `jwt`, `pat`, …) are scrubbed credentials.
+  `jwt`, `pat`, …) are scrubbed credentials. Every `?k=v` value inside error
+  text is `***` (scheme-less `/mcp?pwd=…` too). A mistyped
+  `--header "Authorization=Bearer …"` or `--env "TOKEN:…"` no longer echoes
+  the value. `hash FILE --url U` is refused instead of ignoring `--url`.
+  Error labels show the stdio command and its arguments with credentials
+  masked (`srv --profile ro --token ***`) so the failing server is
+  identifiable (dogfood CS-11; the earlier fix showed `srv …`).
 
 - Server text printed to a terminal or CI log is neutralized. `check`
   printed tool names and property paths raw: a name containing a newline

@@ -79,7 +79,10 @@ describe('targetSecrets / describeTarget', () => {
     expect(describeTarget({ kind: 'http', url: `https://u:p@h:8443/mcp?key=${CANARY}` })).toBe('https://h:8443/mcp [query redacted]');
     expect(describeTarget({ kind: 'http', url: 'https://h/mcp' })).toBe('https://h/mcp');
     expect(describeTarget({ kind: 'http', url: `https://h/mcp/${CANARY}A1/x` })).toBe('https://h/mcp/***/x');
-    expect(describeTarget({ kind: 'stdio', command: '/usr/local/bin/srv', args: ['--token', CANARY] })).toBe('srv …');
+    // dogfood CS-11: show which server (command + args) failed, credentials masked
+    expect(
+      describeTarget({ kind: 'stdio', command: '/usr/local/bin/srv', args: ['--token', CANARY, '--profile', 'ro', `--api-key=${CANARY}k`, 'https://h/x?sig=1', `${CANARY}A1b2c3`] }),
+    ).toBe('srv --token *** --profile ro --api-key=*** https://h/x?[query redacted] ***');
     expect(describeTarget({ kind: 'stdio', command: 'srv', args: [] })).toBe('srv');
   });
 });
@@ -120,6 +123,41 @@ describe('URLs inside error text', () => {
     expect(all).toMatch(/SignatureDoesNotMatch/);
     const seen = everything(dir, all);
     for (const v of [CANARY, pathKey, nonce]) expect(seen).not.toContain(v);
+  });
+});
+
+describe('argument errors, scheme-less URLs, conflicting targets', () => {
+  it('a mistyped --header / --env never echoes its value', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-sec-'));
+    const h = run(['snapshot', '--url', 'https://h/mcp', '--header', `Authorization=Bearer ${CANARY}`], dir);
+    expect(h.code).toBe(2);
+    expect(h.stderr).toMatch(/--header expects "Name: value"/);
+    const e = run(['snapshot', '--env', `API_TOKEN:${CANARY}`, '--', 'node'], dir);
+    expect(e.code).toBe(2);
+    expect(e.stderr).toMatch(/--env expects "KEY=value"/);
+    expect(h.all + e.all).not.toContain(CANARY);
+  });
+
+  it('error text: every query value on any URL or path-with-query is redacted, whatever its name', () => {
+    const t = oneLine(`POST /mcp?pwd=${CANARY}1&page=${CANARY}2 failed (upstream h:8080/x?q=${CANARY}3#f); see https://d/x?y=${CANARY}4.`);
+    for (let i = 1; i <= 4; i++) expect(t).not.toContain(`${CANARY}${i}`);
+    expect(t).toContain('/mcp?pwd=***&page=***');
+  });
+
+  it('hash FILE with a live target is refused, not silently ignored', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-sec-'));
+    const r = run(['hash', 'snap.json', '--url', 'https://h/mcp'], dir);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/give a snapshot FILE or a live target \(--url or -- command\), not both/);
+    expect(run(['hash', 'snap.json', '--', 'node'], dir).stderr).toMatch(/not both/);
+  });
+
+  it('error labels show the command and args, credentials masked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-sec-'));
+    const r = run(['snapshot', '--', '/nonexistent/server', '--profile', 'ro', '--token', CANARY], dir);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/error: server --profile ro --token \*\*\*: /);
+    expect(r.all).not.toContain(CANARY);
   });
 });
 

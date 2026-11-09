@@ -18,7 +18,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { basename } from 'node:path';
 
 import { canonicalJson } from './canonical.js';
-import { safeUrl } from './redact.js';
+import { maskedArgs, safeUrl } from './redact.js';
 import { GroupStdioTransport, type GroupStdioParams } from './stdio-transport.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
@@ -61,11 +61,12 @@ export interface CaptureOptions {
 
 /**
  * A label for messages and reports that carries no credentials: the stdio
- * command's basename (arguments elided, they may hold tokens), or the URL's
+ * command's basename and its arguments with credentials masked
+ * (`maskedArgs`), so a user can tell which server failed, or the URL's
  * origin and path (no query, no user:password@).
  */
 export function describeTarget(t: Target): string {
-  return t.kind === 'stdio' ? `${basename(t.command)}${t.args.length > 0 ? ' …' : ''}` : safeUrl(t.url);
+  return t.kind === 'stdio' ? [basename(t.command), ...maskedArgs(t.args)].join(' ') : safeUrl(t.url);
 }
 
 /**
