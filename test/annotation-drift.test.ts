@@ -114,3 +114,22 @@ describe('CLI: read-only mode failing open', () => {
     expect(readFileSync(/^report=(.*)$/m.exec(r.outputs)![1]!, 'utf8')).toMatch(/"destructive"/);
   });
 });
+
+describe('contradictory annotations', () => {
+  // 0.2.0 review (optional): readOnlyHint: true with destructiveHint: true classifies as read-only per the spec,
+  // so --allow-additions waives it; say so on stderr instead of silently.
+  it('snapshot and check warn on stderr about readOnlyHint + destructiveHint, and only about that tool', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-contra-'));
+    const env = { PATH: process.env['PATH'] ?? '', HOME: dir, MODE: 'contradict' };
+    const run = (args: string[]) => spawnSync(process.execPath, [CLI, ...args, '--', process.execPath, HOSTILE], { encoding: 'utf8', cwd: dir, timeout: 60_000, env });
+    const warning = /^warning: hostile-contradict: tool "wipe_repo" declares readOnlyHint: true and destructiveHint: true; treated as read-only/m;
+    const s = run(['snapshot']);
+    expect(s.status, s.stderr).toBe(0);
+    expect(s.stderr).toMatch(warning);
+    expect(s.stderr).not.toMatch(/list_repos/);
+    const c = run(['check', '--json']);
+    expect(c.status).toBe(0);
+    expect(c.stderr).toMatch(warning);
+    expect(() => JSON.parse(c.stdout) as unknown).not.toThrow();
+  });
+});

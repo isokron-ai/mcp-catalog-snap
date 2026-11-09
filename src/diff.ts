@@ -59,6 +59,24 @@ export function toolSafety(tool: unknown): ToolSafety {
   return Object.hasOwn(ann, 'destructiveHint') && ann['destructiveHint'] === false ? 'write' : 'destructive';
 }
 
+/**
+ * Names of tools that declare both `readOnlyHint: true` and
+ * `destructiveHint: true`. The spec makes `destructiveHint` meaningful only
+ * when `readOnlyHint` is false, so these classify as read-only; the pair is
+ * contradictory and worth a human look (a mislabelled write tool would be
+ * waived by `--allow-additions`).
+ */
+export function contradictoryAnnotations(tools: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const t of tools) {
+    if (!isObject(t as JsonValue)) continue;
+    const o = t as { [k: string]: JsonValue };
+    const a = o['annotations'];
+    if (isObject(a) && a['readOnlyHint'] === true && a['destructiveHint'] === true) out.push(typeof o['name'] === 'string' ? o['name'] : '');
+  }
+  return out;
+}
+
 export interface SafetyDiff {
   /** Every added tool with its classification. */
   added: { key: string; safety: ToolSafety }[];

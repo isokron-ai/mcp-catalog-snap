@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import { fingerprint } from './canonical.js';
 import { capture, describeTarget, type CaptureOptions, type Target } from './capture.js';
 import { DEFAULT_CONFIG_FILE, DEFAULT_SNAPSHOT_DIR, loadConfig, type ServerSpec } from './config.js';
-import { diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
+import { contradictoryAnnotations, diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
 import { renderDiff, renderSnapshotHeader, type CheckReport, type ServerResult } from './render.js';
 import {
   SnapshotIntegrityError,
@@ -112,6 +112,16 @@ function labelOf(spec: ServerSpec): string {
   return spec.label ?? (spec.name || describeTarget(spec.target));
 }
 
+/** Warn (stderr) about tools whose annotations contradict each other; classification still follows the spec (read-only). */
+function warnAnnotations(io: IO, server: string, snap: Snapshot): void {
+  for (const tool of contradictoryAnnotations(snap.catalog.tools)) {
+    io.err(
+      `warning: ${visible(server)}: tool ${visible(JSON.stringify(tool))} declares readOnlyHint: true and destructiveHint: true; ` +
+        'treated as read-only (destructiveHint only applies when readOnlyHint is false), check which is meant',
+    );
+  }
+}
+
 function snapshotPath(dir: string, name: string): string {
   return join(dir, `${safeFileName(name)}.json`);
 }
@@ -166,6 +176,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
+      warnAnnotations(io, name, snap);
       const text = serializeSnapshot(snap);
       assertNoSecrets(text, targetSecrets(spec.target), 'captured catalog');
       if (opts.noWrite) {
@@ -220,6 +231,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       const raw = await capture(spec.target, captureOpts(opts));
       const live = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
+      warnAnnotations(io, name, live);
       const path = snapshotPath(resolved.snapshotDir, name);
       if (!existsSync(path)) {
         throw new Error(`no snapshot at ${path} — run \`mcp-catalog-snap snapshot\` first`);
