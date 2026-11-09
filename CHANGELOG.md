@@ -128,9 +128,25 @@ uses semantic versioning once past 0.x.
   text is `***` (scheme-less `/mcp?pwd=…` too). A mistyped
   `--header "Authorization=Bearer …"` or `--env "TOKEN:…"` no longer echoes
   the value. `hash FILE --url U` is refused instead of ignoring `--url`.
-  Error labels show the stdio command and its arguments with credentials
-  masked (`srv --profile ro --token ***`) so the failing server is
-  identifiable (dogfood CS-11; the earlier fix showed `srv …`).
+  Stdio servers launched from a command line are labelled by the command
+  basename plus a short stable hash of the command line (`node#1a2b3c4d`;
+  `--label TEXT` on `snapshot` / `check` names one explicitly), never by
+  their arguments: the release candidate showed the arguments with a list
+  of credential patterns masked, and `check --report r.json -- node srv
+  --header "Authorization: Bearer …" postgresql://u:PW@h/db` still wrote
+  both secrets to stderr and to the report's `servers[].server`, as did
+  `mongodb+srv://` / `redis://` userinfo, `-e TOKEN=V` / `KEY=V` with a
+  value lacking a digit or containing punctuation, `--dsn=postgres://…` and
+  `--pat` / `--bearer` / `-t` / `-k` values. The hash is taken over the
+  command line with credentials masked. As defence in depth, the masking
+  (and the set of argument values scrubbed from all output) now covers URL
+  userinfo for any scheme, values of any flag whose name contains token,
+  secret, key, pass, pwd, auth, bearer, cred, cookie or session or has the
+  word pat, dsn, pw, sig or jwt, `-H` / `--header` values, `NAME=VALUE` with
+  a credential NAME, credential pairs in query and connection strings, and
+  `Authorization:` / `Bearer` values anywhere (`-t` / `-k` / `-p` values
+  are masked for display only). Configured servers were never affected:
+  they are labelled by their `name`.
 
 - Server text printed to a terminal or CI log is neutralized. `check`
   printed tool names and property paths raw: a name containing a newline

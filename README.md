@@ -79,7 +79,7 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 
 | command | does |
 | --- | --- |
-| `snapshot [-- cmd …] [--url U]` | capture → `.mcp-catalog/<server>.json` (`--name`, `--dir`, `--no-write`) |
+| `snapshot [-- cmd …] [--url U]` | capture → `.mcp-catalog/<server>.json` (`--name`, `--label`, `--dir`, `--no-write`) |
 | `check [--server N] [--ignore-descriptions] [--allow-additions [--allow-write-additions]] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
 | `diff A.json B.json [--json]` | diff two snapshot files |
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
@@ -276,9 +276,13 @@ one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers, credential-named
 URL query values (`?api_key=`, `?token=`, `?sig=`, `X-Amz-Signature`,
-`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credential-named stdio
-arguments (`--token X`, `--api-key=X`) and credential-looking `--env` values
-(all of 8+ characters) are
+`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credentials in stdio
+arguments (values of credential-named flags such as `--token X`,
+`--api-key=X`, `--pat X`, `--dsn=…`; credential `-H`/`--header` values;
+`NAME=VALUE` where NAME names a credential; URL passwords for any scheme,
+`postgresql://`, `mongodb+srv://`, `redis://` included; credential pairs in
+query and connection strings; `Bearer` values) and credential-looking
+`--env` values (all of 8+ characters) are
 scrubbed from the report and diff data before anything is formatted, and
 again from everything any command prints or writes, in raw, markdown,
 JSON-pointer, JSON, percent-encoded and base64 forms, including text the
@@ -287,10 +291,15 @@ refused rather than written to a snapshot or raw dump. Credential headers
 shorter than 8 characters are refused, and so is a `--url` with
 `user:password@`. Report sources and every message label a target by URL
 origin and path (credential-looking path segments masked, any query shown
-only as `[query redacted]`) or by the stdio command's basename and arguments
-(`--token X`, `--api-key=X` and credential-looking values shown as `***`,
-URLs as origin + path; the sweep report's `source` keeps the basename
-only). URLs inside server and SDK error text are reduced the same way, and
+only as `[query redacted]`) or, for a stdio server, by the command's
+basename and a short hash of its command line, `node#1a2b3c4d`, never by
+its arguments: credential syntax on a command line is open-ended, so no
+masking rule can be trusted to catch it all. The hash is stable across
+runs, distinguishes servers whose command lines differ in anything but a
+recognized credential, and is computed over the masked command line, so it
+is no guessing oracle for those. Name an ad-hoc server yourself with
+`--label TEXT` (`snapshot`, `check`); configured servers are labelled by
+their `name`. The sweep report's `source` keeps the basename only. URLs inside server and SDK error text are reduced the same way, and
 every `?k=v` value in error text is shown as `***` whatever its name, so a
 4xx body that repeats the request target (`/mcp?pwd=…`) cannot echo it.
 Argument errors (`--header`, `--env` without a separator) never show the

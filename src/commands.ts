@@ -47,6 +47,8 @@ export interface TargetSelection {
   target?: Target;
   /** Snapshot name override for an ad-hoc target. */
   name?: string;
+  /** Display label for an ad-hoc target in messages and reports (default: `name`, else command basename + hash, or URL origin + path). */
+  label?: string;
   /** Config file path (default .mcp-catalog.json, only if it exists). */
   config?: string;
   /** Only this configured server. */
@@ -78,11 +80,12 @@ function resolveTargets(sel: TargetSelection): Resolved {
   if (sel.target) {
     if (sel.server) throw new Error('--server selects a configured server; it cannot be combined with an ad-hoc target');
     return {
-      specs: [{ name: sel.name ?? '', target: sel.target }],
+      specs: [{ name: sel.name ?? '', target: sel.target, ...(sel.label !== undefined ? { label: sel.label } : {}) }],
       snapshotDir: resolve(cwd, sel.dir ?? DEFAULT_SNAPSHOT_DIR),
       adHoc: true,
     };
   }
+  if (sel.label !== undefined) throw new Error('--label names an ad-hoc target (`-- command` or --url); configured servers are labelled by their name');
   const configPath = resolve(cwd, sel.config ?? DEFAULT_CONFIG_FILE);
   if (!existsSync(configPath)) {
     throw new Error(
@@ -102,6 +105,11 @@ function resolveTargets(sel: TargetSelection): Resolved {
   }
   if (specs.length === 0) throw new Error(`${configPath} lists no servers`);
   return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false };
+}
+
+/** How messages and reports name a server: `--label`, else its name, else `describeTarget` (never the stdio arguments). */
+function labelOf(spec: ServerSpec): string {
+  return spec.label ?? (spec.name || describeTarget(spec.target));
 }
 
 function snapshotPath(dir: string, name: string): string {
@@ -173,7 +181,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       }
     } catch (err) {
       failures++;
-      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${oneLine((err as Error).message)}`);
+      io.err(`error: ${visible(labelOf(spec))}: ${oneLine((err as Error).message)}`);
     }
   }
   return failures > 0 ? EXIT_ERROR : EXIT_OK;
@@ -207,7 +215,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   const results: ServerResult[] = [];
 
   for (const spec of resolved.specs) {
-    const label = spec.name || describeTarget(spec.target);
+    const label = labelOf(spec);
     try {
       const raw = await capture(spec.target, captureOpts(opts));
       const live = buildSnapshot(raw);
@@ -254,7 +262,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         r.snapshotPath = err.path;
       }
       results.push(r);
-      if (!opts.json) io.err(`error: ${label}: ${oneLine((err as Error).message)}`);
+      if (!opts.json) io.err(`error: ${visible(label)}: ${oneLine((err as Error).message)}`);
     }
   }
 

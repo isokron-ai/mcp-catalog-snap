@@ -51,41 +51,153 @@ function urlSecrets(url: string): string[] {
 }
 
 /**
- * Stdio arguments for display: the value after a credential-named flag
- * (`--token X`, `--api-key=X`) and any credential-looking argument become
- * `***`; URLs keep origin + path only.
+ * Flag and variable names whose value is a credential. Substrings match
+ * anywhere in the name (`--api-key`, `GITHUB_TOKEN`, `--authToken`); short
+ * words only as a whole dash/underscore/dot/camel-separated word (`--pat`,
+ * `--sentry-dsn`, but not `--path`).
+ */
+const CREDENTIAL_NAME_PART = /token|secret|key|pass|pwd|auth|bearer|cred|cookie|session/i;
+const CREDENTIAL_NAME_WORD = /^(pat|dsn|pw|sig|jwt)$/i;
+
+/** A flag (`--github-pat`, `-api_key`) or variable name (`DB_PASSWORD`) that names a credential. */
+export function credentialName(name: string): boolean {
+  const n = name.replace(/^-+/, '');
+  if (CREDENTIAL_NAME_PART.test(n)) return true;
+  return n
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .split(/[-_.]+/)
+    .some((w) => CREDENTIAL_NAME_WORD.test(w));
+}
+
+/** Single-letter flags that commonly take a token or password (`-t`, `-k`, `-p`): masked for display only (too ambiguous to refuse catalogs over). */
+const SHORT_SECRET_FLAG = /^-[tkp]$/;
+const HEADER_FLAG = /^(-H|--header)$/;
+const FLAG = /^--?[A-Za-z0-9_.-]+$/;
+const FLAG_EQ = /^(--?[A-Za-z0-9_.-]+)=([\s\S]*)$/;
+/** NAME=VALUE as a whole argument (`-e TOKEN=V`, `env KEY=V cmd`). */
+const NAME_EQ = /^([A-Za-z_][A-Za-z0-9_.-]*)=([\s\S]*)$/;
+/** NAME=VALUE pairs inside a value: query strings (any scheme), connection strings (`Password=x;`). */
+const INLINE_PAIR = /(^|[?&;,\s])([A-Za-z_][A-Za-z0-9_.-]*)=([^&;,\s]*)/g;
+/** scheme://userinfo@ for any scheme (postgresql, mongodb+srv, redis, amqp, https, …); the last `@` before the path ends it. */
+const URL_USERINFO = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/?#]*)@/g;
+const AUTHORIZATION = /\b((?:proxy-)?authorization)\s*[:=][\s\S]*/gi;
+const BEARER = /\b(bearer|basic)\s+\S+/gi;
+
+/** One argument's text with every embedded credential masked (URL userinfo, credential NAME=VALUE pairs, Authorization / Bearer values, credential-looking values, query values). */
+function maskText(a: string): string {
+  if (looksSecret(a)) return REDACTED;
+  const whole = NAME_EQ.exec(a);
+  if (whole && credentialName(whole[1]!)) return `${whole[1]}=${REDACTED}`;
+  return scrubErrorText(
+    a
+      .replace(URL_USERINFO, `$1${REDACTED}@`)
+      .replace(AUTHORIZATION, `$1: ${REDACTED}`)
+      .replace(BEARER, `$1 ${REDACTED}`)
+      .replace(INLINE_PAIR, (m, pre: string, k: string) => (credentialName(k) ? `${pre}${k}=${REDACTED}` : m)),
+  )
+    .split(/([\s:=,;@/])/)
+    .map((w) => (looksSecret(w) ? REDACTED : w))
+    .join('');
+}
+
+/** A header argument for display: the name stays, the value never does. */
+function maskHeader(h: string): string {
+  const i = h.indexOf(':');
+  return i > 0 ? `${h.slice(0, i)}: ${REDACTED}` : REDACTED;
+}
+
+/**
+ * Stdio arguments for display (defence in depth: labels do not show
+ * arguments at all, see `describeTarget`). Masked: the value of any
+ * credential-named flag (`--token X`, `--api-key=X`, `--pat X`,
+ * `--dsn=…`), of `-t`/`-k`/`-p`, every `-H`/`--header` value, `NAME=VALUE`
+ * where NAME names a credential, URL userinfo for any scheme, credential
+ * pairs in query and connection strings, `Authorization:` / `Bearer` values
+ * anywhere, and credential-looking values. http(s) URLs keep origin + path.
  */
 export function maskedArgs(args: readonly string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    const eq = /^(--?[A-Za-z0-9_.-]+)=(.*)$/.exec(a);
+    const next = args[i + 1];
+    const eq = FLAG_EQ.exec(a);
     if (eq) {
-      out.push(CREDENTIAL_ENV.test(eq[1]!) || looksSecret(eq[2]!) ? `${eq[1]}=${REDACTED}` : `${eq[1]}=${scrubErrorText(eq[2]!)}`);
-    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a) && args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) {
+      const flag = eq[1]!;
+      if (HEADER_FLAG.test(flag)) out.push(`${flag}=${maskHeader(eq[2]!)}`);
+      else out.push(credentialName(flag) || SHORT_SECRET_FLAG.test(flag) ? `${flag}=${REDACTED}` : `${flag}=${maskText(eq[2]!)}`);
+    } else if (FLAG.test(a) && next !== undefined && HEADER_FLAG.test(a)) {
+      out.push(a, maskHeader(next));
+      i++;
+    } else if (FLAG.test(a) && next !== undefined && !next.startsWith('-') && (credentialName(a) || SHORT_SECRET_FLAG.test(a))) {
       out.push(a, REDACTED);
       i++;
+    } else if (/^-[tkpH]./.test(a) && !a.startsWith('--')) {
+      // attached short value: -tTOKEN, -pPASSWORD, -HAuthorization:…
+      out.push(`${a.slice(0, 2)}${REDACTED}`);
     } else {
-      out.push(looksSecret(a) ? REDACTED : scrubErrorText(a));
+      out.push(maskText(a));
     }
   }
   return out;
 }
 
-/** Stdio arguments of credential-named flags: `--token X`, `--api-key=X`. */
+/** Credentials embedded in one argument: URL passwords (any scheme), credential NAME=VALUE pairs, Bearer and Authorization values. */
+function embeddedSecrets(a: string): string[] {
+  const out: string[] = [];
+  const whole = NAME_EQ.exec(a);
+  if (whole && credentialName(whole[1]!)) out.push(whole[2]!);
+  for (const m of a.matchAll(URL_USERINFO)) {
+    const info = m[2]!;
+    const c = info.indexOf(':');
+    if (c >= 0) out.push(info.slice(c + 1), decodeSafe(info.slice(c + 1)));
+    else if (looksSecret(info)) out.push(info);
+  }
+  for (const m of a.matchAll(INLINE_PAIR)) if (credentialName(m[2]!)) out.push(m[3]!, decodeSafe(m[3]!));
+  for (const m of a.matchAll(/\bbearer\s+(\S+)/gi)) out.push(m[1]!);
+  const auth = /\b(?:proxy-)?authorization\s*[:=]\s*(.+)$/i.exec(a);
+  if (auth) out.push(auth[1]!, ...(/^\S+\s+(.+)$/.exec(auth[1]!)?.slice(1) ?? []));
+  out.push(...urlSecrets(a));
+  return out;
+}
+
+/** A credential header's secret parts: the value and the part after its scheme. */
+function headerSecrets(h: string): string[] {
+  const i = h.indexOf(':');
+  if (i <= 0 || !CREDENTIAL_HEADER.test(h.slice(0, i).trim())) return [];
+  const v = h.slice(i + 1).trim();
+  const m = /^\S+\s+(.+)$/.exec(v);
+  return m ? [v, m[1]!] : [v];
+}
+
+/**
+ * Credentials in stdio arguments, scrubbed from all output (and a catalog
+ * echoing one is refused): values of credential-named flags (`--token X`,
+ * `--api-key=X`, `--pat X`, `--dsn=…`), credential `-H`/`--header` values,
+ * `NAME=VALUE` where NAME names a credential, URL passwords for any scheme,
+ * credential pairs in query / connection strings, and Bearer values. (`-t`,
+ * `-k`, `-p` values are only masked for display: too ambiguous to refuse
+ * catalogs over.)
+ */
 function argSecrets(args: readonly string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
-    const eq = /^--?([A-Za-z0-9_.-]+)=(.+)$/.exec(a);
+    const eq = FLAG_EQ.exec(a);
     if (eq) {
-      if (CREDENTIAL_ENV.test(eq[1]!)) out.push(eq[2]!);
-    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a)) {
+      if (HEADER_FLAG.test(eq[1]!)) out.push(...headerSecrets(eq[2]!));
+      else if (credentialName(eq[1]!)) out.push(eq[2]!);
+      out.push(...embeddedSecrets(eq[2]!));
+    } else if (FLAG.test(a) && HEADER_FLAG.test(a) && args[i + 1] !== undefined) {
+      out.push(...headerSecrets(args[i + 1]!), ...embeddedSecrets(args[i + 1]!));
+      i++;
+    } else if (FLAG.test(a) && credentialName(a)) {
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith('-')) {
-        out.push(next);
+        out.push(next, ...embeddedSecrets(next));
         i++;
       }
+    } else {
+      out.push(...embeddedSecrets(a));
     }
   }
   return out;
@@ -106,7 +218,7 @@ export function targetSecrets(t: Target | undefined): string[] {
     }
     out.push(...urlSecrets(t.url));
   } else if (t?.kind === 'stdio') {
-    for (const [k, v] of Object.entries(t.env ?? {})) if (CREDENTIAL_ENV.test(k)) out.push(v);
+    for (const [k, v] of Object.entries(t.env ?? {})) if (CREDENTIAL_ENV.test(k) || credentialName(k)) out.push(v);
     out.push(...argSecrets(t.args));
   }
   return normalizeSecrets(out);

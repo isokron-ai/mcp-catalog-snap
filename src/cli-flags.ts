@@ -13,8 +13,8 @@ const ALWAYS = ['help', 'version'];
 const MAX_POSITIONALS: Readonly<Record<string, number>> = { snapshot: 0, check: 0, sweep: 0, hash: 1, diff: 2 };
 
 export const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
-  snapshot: [...TARGET, ...CONFIG, 'no-write', 'quiet'],
-  check: [...TARGET, ...CONFIG, 'ignore-descriptions', 'allow-additions', 'allow-write-additions', 'update', 'json', 'report', 'quiet'],
+  snapshot: [...TARGET, ...CONFIG, 'label', 'no-write', 'quiet'],
+  check: [...TARGET, ...CONFIG, 'label', 'ignore-descriptions', 'allow-additions', 'allow-write-additions', 'update', 'json', 'report', 'quiet'],
   diff: ['ignore-descriptions', 'allow-additions', 'allow-write-additions', 'json'],
   hash: [...TARGET, ...CONFIG],
   sweep: [

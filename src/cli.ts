@@ -37,6 +37,9 @@ Target options (snapshot / check / hash):
   --env KEY=value       extra env for the stdio child (repeatable)
   --cwd DIR             working directory for the stdio child
   --name NAME           snapshot name for an ad-hoc target (default: the server's reported name)
+  --label TEXT          (snapshot / check) how messages and reports name an ad-hoc target
+                        (default: --name, else command basename + hash of its command line,
+                        e.g. node#1a2b3c4d, or URL origin + path; arguments are never shown)
   --config FILE         config file (default .mcp-catalog.json)
   --server NAME         only this configured server
   --dir DIR             snapshot directory (default .mcp-catalog, or snapshotDir from config)
@@ -143,6 +146,13 @@ function policy(args: ParsedArgs): { ignoreDescriptions: boolean; allowAdditions
   };
 }
 
+function label(args: ParsedArgs): string | undefined {
+  if (args.flags['label'] === true) throw new Error('--label needs a value');
+  const l = str(args.flags['label']);
+  if (l !== undefined && l.trim() === '') throw new Error('--label must not be empty');
+  return l;
+}
+
 function optional<T>(key: string, v: T | undefined): Record<string, T> {
   return v === undefined ? {} : { [key]: v };
 }
@@ -175,6 +185,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
     const common = {
       ...optional('target', target),
       ...optional('name', str(args.flags['name'])),
+      ...optional('label', label(args)),
       ...optional('config', str(args.flags['config'])),
       ...optional('server', str(args.flags['server'])),
       ...optional('dir', str(args.flags['dir'])),
