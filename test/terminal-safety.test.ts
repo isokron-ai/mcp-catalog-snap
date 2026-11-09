@@ -262,8 +262,14 @@ describe('CLI end to end (hostile stdio server)', () => {
     ]);
     const md = readFileSync(summary, 'utf8');
     expect(md).not.toMatch(CONTROL);
-    // exactly the action's own fence pair
-    expect(md.split('\n').filter((l) => /^ {0,3}(```|~~~)/.test(l))).toEqual(['```', '```']);
+    // exactly the action's own fence pair, longer than any backtick run inside it (the drift text quotes ``` itself)
+    const mdLines = md.split('\n');
+    const fences = mdLines.filter((l) => /^ {0,3}(```|~~~)/.test(l));
+    expect(fences).toHaveLength(2);
+    expect(fences[0]).toMatch(/^`{3,}$/);
+    expect(fences[1]).toBe(fences[0]);
+    const inside = mdLines.slice(mdLines.indexOf(fences[0]!) + 1, mdLines.lastIndexOf(fences[0]!)).join('\n');
+    for (const run of inside.match(/`+/g) ?? []) expect(run.length).toBeLessThan(fences[0]!.length);
   });
 
   it('check: a hostile added tool cannot inject workflow commands or escapes', () => {
