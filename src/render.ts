@@ -4,6 +4,7 @@
  */
 
 import type { CatalogDiff, PathChange, Section, Verdict } from './diff.js';
+import { visible } from './safe-text.js';
 import type { Snapshot } from './snapshot.js';
 
 const LABEL: Record<Section, string> = {
@@ -42,7 +43,7 @@ function renderChange(c: PathChange): string[] {
   const tag = c.descriptive ? ' (description)' : '';
   const [b, a] =
     typeof c.before === 'string' && typeof c.after === 'string' ? focusedPair(c.before, c.after) : [short(c.before), short(c.after)];
-  return [`      ${c.path}${tag}`, `        - ${b}`, `        + ${a}`];
+  return [`      ${visible(c.path)}${tag}`, `        - ${visible(b)}`, `        + ${visible(a)}`];
 }
 
 export interface RenderOptions {
@@ -71,21 +72,21 @@ export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOpti
       `${LABEL[s.section]}: ${diff.counts.before[s.section]} -> ${diff.counts.after[s.section]} ` +
         `(+${s.added.length} added, -${s.removed.length} removed, ~${s.changed.length} changed)`,
     );
-    for (const k of s.added) lines.push(`  + ${k}`);
-    for (const k of s.removed) lines.push(`  - ${k}`);
+    for (const k of s.added) lines.push(`  + ${visible(k)}`);
+    for (const k of s.removed) lines.push(`  - ${visible(k)}`);
     for (const c of s.changed) {
-      lines.push(`  ~ ${c.key}${c.descriptionOnly ? '  [description-only]' : ''}`);
+      lines.push(`  ~ ${visible(c.key)}${c.descriptionOnly ? '  [description-only]' : ''}`);
       for (const ch of c.changes) lines.push(...renderChange(ch));
     }
   }
   lines.push('');
   if (verdict.waived.length > 0) {
     lines.push('waived by policy:');
-    for (const w of verdict.waived) lines.push(`  ${w}`);
+    for (const w of verdict.waived) lines.push(`  ${visible(w)}`);
   }
   if (verdict.drift) {
     lines.push(`DRIFT: ${verdict.reasons.length} reason(s)`);
-    for (const r of verdict.reasons) lines.push(`  ${r}`);
+    for (const r of verdict.reasons) lines.push(`  ${visible(r)}`);
   } else {
     lines.push('no drift under the current policy (bytes differ: cache prefix WILL change)');
   }
@@ -95,8 +96,8 @@ export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOpti
 export function renderSnapshotHeader(snap: Snapshot): string {
   const c = snap.catalog;
   return [
-    `server:          ${snap.server.name} ${snap.server.version}`,
-    `protocolVersion: ${snap.protocolVersion ?? '(unknown)'}`,
+    `server:          ${visible(snap.server.name)} ${visible(snap.server.version)}`,
+    `protocolVersion: ${visible(snap.protocolVersion ?? '(unknown)')}`,
     `captured:        ${snap.capturedAt} by ${snap.capturedWith}`,
     `catalog:         ${c.tools.length} tools, ${c.prompts.length} prompts, ${c.resourceTemplates.length} resource templates`,
     `sha256:          ${snap.sha256}`,

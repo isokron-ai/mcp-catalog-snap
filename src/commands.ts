@@ -28,6 +28,7 @@ import {
   snapshotSelfConsistent,
   type Snapshot,
 } from './snapshot.js';
+import { jsonSafe, oneLine, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -146,7 +147,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    rawIo.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${oneLine((err as Error).message)}`);
     return EXIT_ERROR;
   }
   const io = scrubbed(rawIo, resolved.specs);
@@ -171,7 +172,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       }
     } catch (err) {
       failures++;
-      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${(err as Error).message}`);
+      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${oneLine((err as Error).message)}`);
     }
   }
   return failures > 0 ? EXIT_ERROR : EXIT_OK;
@@ -193,7 +194,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   try {
     resolved = resolveTargets(opts);
   } catch (err) {
-    rawIo.err(`error: ${(err as Error).message}`);
+    rawIo.err(`error: ${oneLine((err as Error).message)}`);
     return EXIT_ERROR;
   }
   const io = scrubbed(rawIo, resolved.specs);
@@ -230,9 +231,9 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         verdict,
       });
       if (!opts.json) {
-        io.out(`== ${name} (${path})`);
+        io.out(`== ${visible(name)} (${visible(path)})`);
         if (stored.server.version !== live.server.version) {
-          io.out(`server version: ${stored.server.version} -> ${live.server.version}`);
+          io.out(`server version: ${visible(stored.server.version)} -> ${visible(live.server.version)}`);
         }
         io.out(renderDiff(diff, verdict));
         io.out('');
@@ -251,7 +252,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         r.snapshotPath = err.path;
       }
       results.push(r);
-      if (!opts.json) io.err(`error: ${label}: ${(err as Error).message}`);
+      if (!opts.json) io.err(`error: ${label}: ${oneLine((err as Error).message)}`);
     }
   }
 
@@ -266,14 +267,14 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   };
   if (opts.reportFile !== undefined) {
     try {
-      writeText(io, opts.reportFile, `${JSON.stringify(report, null, 2)}\n`);
+      writeText(io, opts.reportFile, `${jsonSafe(JSON.stringify(report, null, 2))}\n`);
     } catch (err) {
-      io.err(`error: cannot write report ${opts.reportFile}: ${(err as Error).message}`);
+      io.err(`error: cannot write report ${opts.reportFile}: ${oneLine((err as Error).message)}`);
       return EXIT_ERROR;
     }
   }
   if (opts.json) {
-    io.out(JSON.stringify(report, null, 2));
+    io.out(jsonSafe(JSON.stringify(report, null, 2)));
   } else if (!anyError) {
     const n = results.length;
     io.out(anyDrift ? `${results.filter((r) => r.drift).length}/${n} server(s) drifted` : `${n}/${n} server(s) match their snapshot`);
@@ -298,13 +299,13 @@ export function cmdDiff(aPath: string, bPath: string, opts: DiffOptions, io: IO)
     a = readVerifiedSnapshot(aPath);
     b = readVerifiedSnapshot(bPath);
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
   const diff = diffCatalogs(a.catalog, b.catalog);
   const verdict = evaluate(diff, opts);
   if (opts.json) {
-    io.out(JSON.stringify({ a: aPath, b: bPath, drift: verdict.drift, diff, verdict }, null, 2));
+    io.out(jsonSafe(JSON.stringify({ a: aPath, b: bPath, drift: verdict.drift, diff, verdict }, null, 2)));
   } else {
     io.out(renderDiff(diff, verdict, { beforeLabel: aPath, afterLabel: bPath }));
   }
@@ -338,11 +339,11 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     for (const spec of resolved.specs) {
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
-      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${spec.name || raw.server.name}` : snap.sha256);
+      io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${visible(spec.name || raw.server.name)}` : snap.sha256);
     }
     return EXIT_OK;
   } catch (err) {
-    io.err(`error: ${(err as Error).message}`);
+    io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
 }

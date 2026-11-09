@@ -224,6 +224,22 @@ and bytes, `$ref` expansion is memoized and cycle-guarded, walks stop at
 descriptions over the cap are flagged, strings over 1 MiB are measured but
 not scanned, tokenization is linear and exact, and markdown output escapes
 server text (entities included) and breaks autolinks and @-mentions.
+Every command prints server text (tool names, paths, server name and
+version, error messages) with control characters, line breaks, bidi
+controls and invisible format characters (zero-width, word joiner, soft
+hyphen, BOM) written as escapes (`\n`, `\u001b`, `\u200b`); markdown
+drops them. On top of that, every line the CLI prints passes one output
+boundary: terminal-active characters become escapes, every `##[` (the
+runner's legacy command form, honored anywhere in a line) becomes
+`#\u0023[`, and a line that would start with a workflow command (`::`,
+after any spaces or invisible characters) or a code fence gets a leading
+`\`, so no server string (or snapshot file name) can inject into a CI log,
+stop the runner's command processing, close the action's step-summary
+fence, or drive the terminal. Every JSON the CLI prints or writes
+(`--json`, `--no-write`, snapshot files, reports, raw dumps) writes C1,
+U+2028/9, bidi and invisible characters and `##[` as `\u` escapes: the
+same values, nothing hidden from a human reading the file or a diff. Error messages are
+one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers (and
 credential-looking `--env` values of 8+ characters for stdio children) are

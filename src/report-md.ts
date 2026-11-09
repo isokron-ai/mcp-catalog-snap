@@ -9,13 +9,13 @@
 
 import { RULES, type Finding, type RuleId, type Severity } from './findings.js';
 import { mdCodeEscape, mdEscape } from './redact.js';
+import { UNSAFE_TEXT } from './safe-text.js';
 import type { Measure } from './metrics.js';
 import type { SweepReport } from './sweep.js';
 
 /** Untrusted text → safe inline markdown (one line, ≤ max chars, no HTML / entities / links / mentions / table breaks). */
 export function mdText(s: string, max = 120): string {
-  // eslint-disable-next-line no-control-regex -- stripping control characters from untrusted text is the point
-  const flat = s.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
+  const flat = s.replace(/[\r\n\t]+/g, ' ').replace(UNSAFE_TEXT, '');
   const cut = flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
   return mdEscape(cut);
 }

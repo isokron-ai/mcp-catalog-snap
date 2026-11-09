@@ -74,6 +74,27 @@ uses semantic versioning once past 0.x.
 
 ### Security
 
+- Server text printed to a terminal or CI log is neutralized. `check`
+  printed tool names and property paths raw: a name containing a newline
+  injected GitHub Actions workflow commands (`::warning::`,
+  `::add-mask::`) into the job log and could close the step-summary code
+  fence, and ESC/BEL sequences reached the terminal. Markdown code spans
+  passed ESC/BEL/NUL through, and server error messages went to stderr raw
+  and unbounded. Now names, paths, reasons and the snapshot header write
+  controls, line separators, bidi controls and invisible format characters
+  (U+00AD, U+061C, U+180E, U+200B–U+200F, U+2060–U+2064, U+2066–U+206F,
+  U+FEFF) as escapes; markdown drops them; every `error:` line is one
+  line, escaped, at most 1,000 chars. `check` also printed the live server
+  version raw (`server version: a -> b`). Every stdout/stderr line now
+  passes an output boundary (`terminalSafe`) that escapes terminal-active
+  characters and neutralizes lines starting with `::` or a code fence,
+  whatever the call site, and breaks every `##[` (GitHub's legacy
+  `##[command]` form is honored anywhere in a line: a tool named
+  `n ##[stop-commands]tok` could silence the action's own `::error`).
+  Every JSON output and file (`--json`, `--no-write`, snapshots, reports,
+  `--save-raw`) writes C1, U+2028/9, bidi and invisible characters and
+  `##[` as `\u` escapes (same values when parsed).
+
 - Live capture is bounded (every command that talks to a server): a list
   stops after 1,000 pages or 64 MiB across pages (a server that returned a
   fresh `nextCursor` forever hung every command with memory growing); one
