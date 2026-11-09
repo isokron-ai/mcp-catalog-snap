@@ -52,6 +52,7 @@ import {
 } from './metrics.js';
 import { isObj } from './schema-walk.js';
 import { REFERENCE_TOKENIZER, type Tokenizer } from './tokenize.js';
+import { jsonSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
 export const REPORT_FORMAT = 'mcp-catalog-snap/sweep/1';
@@ -353,5 +354,5 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
 
 /** The report bytes: 2-space JSON, fixed key order, trailing newline. */
 export function serializeReport(report: SweepReport): string {
-  return `${JSON.stringify(report, null, 2)}\n`;
+  return `${jsonSafe(JSON.stringify(report, null, 2))}\n`;
 }

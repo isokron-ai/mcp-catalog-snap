@@ -86,14 +86,15 @@ export function bool(v: string | true | undefined): boolean {
 /** `Name: value` → ['Name', 'value'] */
 export function parseHeader(h: string): [string, string] {
   const idx = h.indexOf(':');
-  if (idx <= 0) throw new Error(`--header expects "Name: value", got ${JSON.stringify(h)}`);
+  // never echo the argument: a mistyped `Authorization=Bearer …` is a credential
+  if (idx <= 0) throw new Error('--header expects "Name: value" (the argument has no ":" after a name; its value is not shown)');
   return [h.slice(0, idx).trim(), h.slice(idx + 1).trim()];
 }
 
 /** `KEY=value` → ['KEY', 'value'] */
 export function parseEnvAssignment(s: string): [string, string] {
   const idx = s.indexOf('=');
-  if (idx <= 0) throw new Error(`--env expects "KEY=value", got ${JSON.stringify(s)}`);
+  if (idx <= 0) throw new Error('--env expects "KEY=value" (the argument has no "=" after a name; its value is not shown)');
   return [s.slice(0, idx), s.slice(idx + 1)];
 }
 

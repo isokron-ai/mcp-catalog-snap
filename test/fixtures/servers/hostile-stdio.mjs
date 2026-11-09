@@ -4,6 +4,7 @@
 // MODE=deep: one tool whose schema nests DEPTH (default 50,000) levels.
 // MODE=big: tools/list answers with one ~1 MiB line (tests set a smaller message cap).
 // MODE=names: one tool; with ADD=1 also a tool whose name and property carry newlines, workflow commands and terminal escapes.
+// MODE=legacy: tool names with `##[cmd]` (runner legacy commands) and ZWSP/RLO/U+2028/NEL/NBSP.
 // MODE=errmsg: tools/list fails with a long error message full of escapes and newlines.
 import { createInterface } from 'node:readline';
 
@@ -34,7 +35,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     }
     out({ jsonrpc: '2.0', id: msg.id, result: { tools } });
   } else if (msg.method === 'tools/list' && MODE === 'errmsg') {
-    out({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: `boom\n::warning::owned \u001b]0;TITLE\u0007\u001b[2J ${'z'.repeat(300000)}` } });
+    out({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: `boom\n::warning::owned \u001b]0;TITLE\u0007\u001b[2J ##[add-mask]DRIFT ##[stop-commands]tok ${'z'.repeat(300000)}` } });
+  } else if (msg.method === 'tools/list' && MODE === 'legacy') {
+    // runner legacy commands anywhere in a line, and characters a human viewer must never see raw
+    const names = ['n ##[stop-commands]tok', 'n ##[error]V1', 'n ##[add-mask]DRIFT', 'n ##[ERROR file=README.md;line=1]F', 'zw\u200b::error::ZWSP', 'rlo\u202eevil', 'ls\u2028x', 'nel\u0085::error::NEL', 'nbsp\u00a0::error::NBSP'];
+    const extra = process.env.ADD ? ['added ##[warning]W', 'added2\u202e\u200b'] : [];
+    out({ jsonrpc: '2.0', id: msg.id, result: { tools: [...names, ...extra].map((name) => ({ name, description: `d ${name}`, inputSchema: { type: 'object', properties: { [name]: { type: 'unknown' } } } })) } });
   } else if (msg.method === 'tools/list' && MODE === 'slowpages') {
     const n = Number(msg.params?.cursor ?? 0) + 1;
     setTimeout(() => out({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: `t${n}`, inputSchema: { type: 'object' } }], nextCursor: String(n) } }), 200);

@@ -241,10 +241,16 @@ version, error messages) with control characters, line breaks, bidi
 controls and invisible format characters (zero-width, word joiner, soft
 hyphen, BOM) written as escapes (`\n`, `\u001b`, `\u200b`); markdown
 drops them. On top of that, every line the CLI prints passes one output
-boundary: terminal-active characters become escapes and a line that would
-start with a workflow command (`::`) or a code fence gets a leading `\`, so
-no server string (or snapshot file name) can inject into a CI log, close
-the action's step-summary fence, or drive the terminal. Error messages are
+boundary: terminal-active characters become escapes, every `##[` (the
+runner's legacy command form, honored anywhere in a line) becomes
+`#\u0023[`, and a line that would start with a workflow command (`::`,
+after any spaces or invisible characters) or a code fence gets a leading
+`\`, so no server string (or snapshot file name) can inject into a CI log,
+stop the runner's command processing, close the action's step-summary
+fence, or drive the terminal. Every JSON the CLI prints or writes
+(`--json`, `--no-write`, snapshot files, reports, raw dumps) writes C1,
+U+2028/9, bidi and invisible characters and `##[` as `\u` escapes: the
+same values, nothing hidden from a human reading the file or a diff. Error messages are
 one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers, credential-named
@@ -260,9 +266,14 @@ refused rather than written to a snapshot or raw dump. Credential headers
 shorter than 8 characters are refused, and so is a `--url` with
 `user:password@`. Report sources and every message label a target by URL
 origin and path (credential-looking path segments masked, any query shown
-only as `[query redacted]`) or by the stdio command's basename (arguments
-elided). URLs inside server and SDK error text are reduced the same way, so
-a 4xx body that repeats the request URL cannot echo its query.
+only as `[query redacted]`) or by the stdio command's basename and arguments
+(`--token X`, `--api-key=X` and credential-looking values shown as `***`,
+URLs as origin + path; the sweep report's `source` keeps the basename
+only). URLs inside server and SDK error text are reduced the same way, and
+every `?k=v` value in error text is shown as `***` whatever its name, so a
+4xx body that repeats the request target (`/mcp?pwd=…`) cannot echo it.
+Argument errors (`--header`, `--env` without a separator) never show the
+value. `hash FILE` together with `--url` or `-- command` is an error.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.
@@ -355,7 +366,10 @@ jobs:
 
 On drift the job fails, the readable diff goes to the step summary, and the
 `drift` output is `"true"`. A snapshot that fails its integrity check
-fails the job too (exit 3, `drift` stays `"false"`). The action builds the pinned copy of the CLI
+fails the job too (exit 3, `drift` stays `"false"`). Any other failure (a
+`${VAR}` the job does not set, a server that does not start, a timeout;
+exit 2) writes the error to the step summary and fails with an `::error`
+as well. The `report` output is set only when the report file was written. The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
 ### Plain shell
@@ -416,6 +430,13 @@ servers, checked in this repo's own CI:
   (default: none, so a slow but valid server can take up to pages ×
   `--timeout`). A live exec sweep queries at most 2,000 listed names.
   Past a cap the command fails with exit 2 and says which cap it hit.
+- A stdio server runs in its own process group, and every close (normal
+  end, error, deadline, Ctrl-C) ends the whole group: stdin closed, then
+  SIGTERM, then SIGKILL after 2 s. Wrappers (`npx`, `uvx`, `bash -c`,
+  `sh -c "x & exec y"`) leave no processes behind, and the server's
+  stderr is forwarded through a pipe the CLI closes, so even a process
+  that escaped the group (`setsid`) cannot keep the CLI from exiting. On
+  Windows the tree is ended with `taskkill /T /F` (not covered by CI).
 
   | cap | value |
   | --- | --- |
@@ -423,7 +444,7 @@ servers, checked in this repo's own CI:
   | pages per list | 1,000 |
   | one list across pages | 64 MiB |
   | per request | `--timeout`, default 30,000 ms |
-  | whole capture | `--timeout-total`, default none |
+  | whole capture | `--timeout-total` (action: `timeout-total-ms`), default none |
   | live exec names | 2,000 |
 - Pagination is followed to exhaustion (within those caps), but a server that emits a
   non-deterministic order across pages still ends up sorted, so order

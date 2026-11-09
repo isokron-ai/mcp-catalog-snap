@@ -29,7 +29,7 @@ import {
   type Snapshot,
 } from './snapshot.js';
 import { readInputText } from './read-input.js';
-import { oneLine, scrubUrls, visible } from './safe-text.js';
+import { jsonSafe, oneLine, scrubErrorText, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -247,7 +247,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       }
     } catch (err) {
       const tampered = err instanceof SnapshotIntegrityError;
-      const r: ServerResult = { server: label, ok: false, drift: false, error: scrubUrls((err as Error).message) };
+      const r: ServerResult = { server: label, ok: false, drift: false, error: scrubErrorText((err as Error).message) };
       if (tampered) {
         r.tampered = true;
         r.snapshotPath = err.path;
@@ -268,14 +268,14 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   };
   if (opts.reportFile !== undefined) {
     try {
-      writeText(io, opts.reportFile, `${JSON.stringify(report, null, 2)}\n`);
+      writeText(io, opts.reportFile, `${jsonSafe(JSON.stringify(report, null, 2))}\n`);
     } catch (err) {
       io.err(`error: cannot write report ${opts.reportFile}: ${oneLine((err as Error).message)}`);
       return EXIT_ERROR;
     }
   }
   if (opts.json) {
-    io.out(JSON.stringify(report, null, 2));
+    io.out(jsonSafe(JSON.stringify(report, null, 2)));
   } else if (!anyError) {
     const n = results.length;
     io.out(anyDrift ? `${results.filter((r) => r.drift).length}/${n} server(s) drifted` : `${n}/${n} server(s) match their snapshot`);
@@ -306,7 +306,7 @@ export function cmdDiff(aPath: string, bPath: string, opts: DiffOptions, io: IO)
   const diff = diffCatalogs(a.catalog, b.catalog);
   const verdict = evaluate(diff, opts);
   if (opts.json) {
-    io.out(JSON.stringify({ a: aPath, b: bPath, drift: verdict.drift, diff, verdict }, null, 2));
+    io.out(jsonSafe(JSON.stringify({ a: aPath, b: bPath, drift: verdict.drift, diff, verdict }, null, 2)));
   } else {
     io.out(renderDiff(diff, verdict, { beforeLabel: aPath, afterLabel: bPath }));
   }

@@ -13,13 +13,13 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { basename } from 'node:path';
 
 import { canonicalJson } from './canonical.js';
-import { safeUrl } from './redact.js';
+import { maskedArgs, safeUrl } from './redact.js';
+import { GroupStdioTransport, type GroupStdioParams } from './stdio-transport.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
 
@@ -61,11 +61,12 @@ export interface CaptureOptions {
 
 /**
  * A label for messages and reports that carries no credentials: the stdio
- * command's basename (arguments elided, they may hold tokens), or the URL's
+ * command's basename and its arguments with credentials masked
+ * (`maskedArgs`), so a user can tell which server failed, or the URL's
  * origin and path (no query, no user:password@).
  */
 export function describeTarget(t: Target): string {
-  return t.kind === 'stdio' ? `${basename(t.command)}${t.args.length > 0 ? ' …' : ''}` : safeUrl(t.url);
+  return t.kind === 'stdio' ? [basename(t.command), ...maskedArgs(t.args)].join(' ') : safeUrl(t.url);
 }
 
 /**
@@ -137,7 +138,7 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
     Object.assign(env, target.env ?? {});
-    const params: ConstructorParameters<typeof StdioClientTransport>[0] = {
+    const params: GroupStdioParams = {
       command: target.command,
       args: target.args,
       env,
@@ -145,7 +146,8 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
       maxBufferSize: maxMessage,
     };
     if (target.cwd) params.cwd = target.cwd;
-    return new StdioClientTransport(params);
+    // Own process group: closing (or a deadline) ends wrappers' grandchildren too, so nothing holds the pipes open.
+    return new GroupStdioTransport(params);
   }
   let url: URL;
   try {

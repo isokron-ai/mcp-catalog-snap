@@ -23,6 +23,7 @@
  */
 
 import { fingerprint, prettyCanonical, sortKeysDeep, type JsonValue } from './canonical.js';
+import { jsonSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
 export const SNAPSHOT_FORMAT = 'mcp-catalog-snap/1';
@@ -168,7 +169,8 @@ export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapsho
 /** The bytes written to disk: pretty-printed, key-sorted, trailing newline. */
 export function serializeSnapshot(snap: Snapshot): string {
   try {
-    return prettyCanonical(snap);
+    // bidi / invisible characters written as \u escapes: same values, nothing hidden in a git diff
+    return jsonSafe(prettyCanonical(snap));
   } catch (err) {
     // Indentation grows with depth: a schema some 20,000 levels deep pretty-prints past V8's string limit.
     if (err instanceof RangeError) {

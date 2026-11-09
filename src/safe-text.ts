@@ -13,7 +13,8 @@
 const ch = (...codes: number[]): string => String.fromCharCode(...codes);
 // Ranges are built from char codes so no editor or tool turns them into raw characters in this file.
 /** Characters that act on a terminal or reorder text: C0 (bar newline and tab, handled per use), DEL, C1, line/paragraph separators, bidi marks, embeddings, overrides and isolates. */
-const TERMINAL_RANGES = `\\u0000-\\u001f\\u007f-\\u009f${ch(0x2028, 0x2029, 0x061c, 0x200e, 0x200f)}${ch(0x202a)}-${ch(0x202e)}${ch(0x2066)}-${ch(0x2069)}`;
+const ACTIVE_NOT_C0 = `\\u007f-\\u009f${ch(0x2028, 0x2029, 0x061c, 0x200e, 0x200f)}${ch(0x202a)}-${ch(0x202e)}${ch(0x2066)}-${ch(0x2069)}`;
+const TERMINAL_RANGES = `\\u0000-\\u001f${ACTIVE_NOT_C0}`;
 /** Invisible format characters that hide or spoof text: soft hyphen, Mongolian vowel separator, zero-width space/joiners, word joiner and invisible operators, deprecated format controls, BOM / zero-width no-break space. */
 const INVISIBLE_RANGES = `${ch(0x00ad, 0x180e)}${ch(0x200b)}-${ch(0x200d)}${ch(0x2060)}-${ch(0x2064)}${ch(0x206a)}-${ch(0x206f)}${ch(0xfeff)}`;
 
@@ -27,6 +28,10 @@ export const UNSAFE_TEXT = new RegExp(`[${TERMINAL_RANGES}${INVISIBLE_RANGES}]`,
  * @-mentions, and server text has already had them removed or escaped.
  */
 const TERMINAL_ACTIVE = new RegExp(`[${TERMINAL_RANGES}]`, 'g');
+/** UNSAFE_TEXT minus C0: in JSON text raw C0 is only structural whitespace (JSON.stringify escapes it inside strings). */
+const JSON_UNSAFE = new RegExp(`[${ACTIVE_NOT_C0}${INVISIBLE_RANGES}]`, 'g');
+/** Leading space or invisible characters before a would-be `::` workflow command (.NET TrimStart trims Unicode spaces; be wider). */
+const LEADING_BLANK = new RegExp(`^[\\s${INVISIBLE_RANGES}]*`);
 
 const SHORT: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
 const escapeChar = (c: string): string => SHORT[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`;
@@ -41,7 +46,7 @@ export const MAX_ERROR_CHARS = 1000;
 
 /** An error message as one visible line: URLs reduced to origin + path (`scrubUrls`), line breaks (with their indentation) become one space, the rest is escaped, then capped. */
 export function oneLine(s: string, max = MAX_ERROR_CHARS): string {
-  const v = visible(scrubUrls(s).replace(/[ \t]*\r?\n[ \t]*/g, ' '));
+  const v = visible(scrubErrorText(s).replace(/[ \t]*\r?\n[ \t]*/g, ' '));
   return v.length > max ? `${v.slice(0, max - 1)}…` : v;
 }
 
@@ -57,8 +62,15 @@ export function oneLine(s: string, max = MAX_ERROR_CHARS): string {
 export function terminalSafe(text: string): string {
   return text
     .replace(TERMINAL_ACTIVE, (c) => (c === '\n' || c === '\t' ? c : escapeChar(c)))
+    // the runner's legacy commands match `##[` anywhere in a line (ActionCommand.TryParse: IndexOf("##[")).
+    // `\u0023` is `#` as a JSON escape, so printed JSON still parses to the same values.
+    .replace(/##\[/g, '#\\u0023[')
     .split('\n')
-    .map((line) => (line.trimStart().startsWith('::') || /^ {0,3}(```|~~~)/.test(line) ? line.replace(/^(\s*)/, '$1\\') : line))
+    .map((line) => {
+      const lead = LEADING_BLANK.exec(line)![0];
+      const rest = line.slice(lead.length);
+      return rest.startsWith('::') || /^ {0,3}(```|~~~)/.test(line) ? `${lead}\\${rest}` : line;
+    })
     .join('\n');
 }
 
@@ -102,6 +114,16 @@ export function safeUrl(url: string, inline = false): string {
   }
 }
 
+/**
+ * Error text from a server or the SDK, made safe to show: every http(s) URL
+ * reduced to `safeUrl` form, then the value of every remaining `?k=v` /
+ * `&k=v` pair (scheme-less request targets like `/mcp?pwd=…`, `host/x?q=…`)
+ * replaced by `***`, whatever the parameter is called.
+ */
+export function scrubErrorText(text: string): string {
+  return scrubUrls(text).replace(/([?&][^\s=&#?"'<>]+)=[^\s&#"'<>]*/g, '$1=***');
+}
+
 /** Every http(s) URL inside free text (server or SDK error messages) reduced to `safeUrl` form; trailing punctuation is kept. */
 export function scrubUrls(text: string): string {
   return text.replace(/\bhttps?:\/\/[^\s"'<>()[\]{}]+/gi, (m) => {
@@ -110,4 +132,17 @@ export function scrubUrls(text: string): string {
     const safe = safeUrl(url, true);
     return `${safe === '<invalid url>' ? '<url>' : safe}${tail}`;
   });
+}
+
+/**
+ * Escape, inside JSON text, every character a human viewer must not see raw
+ * (C1, U+2028/9, bidi and invisible format characters; JSON.stringify
+ * already escapes C0). Such characters can only occur inside JSON strings,
+ * so the result parses to the same values; `##[` (a runner legacy command)
+ * becomes `#\u0023[` the same way. Used for every JSON the CLI
+ * prints or writes: `--json`, `--no-write`, snapshot files, reports, raw
+ * dumps.
+ */
+export function jsonSafe(json: string): string {
+  return json.replace(JSON_UNSAFE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).replace(/##\[/g, '#\\u0023[');
 }

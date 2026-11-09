@@ -11,7 +11,7 @@
 import { writeFileSync } from 'node:fs';
 
 import type { Target } from './capture.js';
-import { UNSAFE_TEXT, decodeSafe, looksSecret, safeUrl } from './safe-text.js';
+import { UNSAFE_TEXT, decodeSafe, looksSecret, safeUrl, scrubErrorText } from './safe-text.js';
 
 export { looksSecret, safeUrl };
 
@@ -47,6 +47,28 @@ function urlSecrets(url: string): string[] {
   const out: string[] = [];
   if (u.password) out.push(u.password, decodeSafe(u.password));
   for (const [k, v] of u.searchParams) if (CREDENTIAL_QUERY.test(k)) out.push(v);
+  return out;
+}
+
+/**
+ * Stdio arguments for display: the value after a credential-named flag
+ * (`--token X`, `--api-key=X`) and any credential-looking argument become
+ * `***`; URLs keep origin + path only.
+ */
+export function maskedArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = /^(--?[A-Za-z0-9_.-]+)=(.*)$/.exec(a);
+    if (eq) {
+      out.push(CREDENTIAL_ENV.test(eq[1]!) || looksSecret(eq[2]!) ? `${eq[1]}=${REDACTED}` : `${eq[1]}=${scrubErrorText(eq[2]!)}`);
+    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a) && args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) {
+      out.push(a, REDACTED);
+      i++;
+    } else {
+      out.push(looksSecret(a) ? REDACTED : scrubErrorText(a));
+    }
+  }
   return out;
 }
 
@@ -122,7 +144,8 @@ export function mdEscape(s: string): string {
 
 /** The escaping `mdCode` applies inside a code span. */
 export function mdCodeEscape(s: string): string {
-  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(UNSAFE_TEXT, '').replace(/\|/g, '\\|')}\``;
+  // `##[` is a runner legacy command anywhere in a line: break it with the renderer's own word joiner
+  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(UNSAFE_TEXT, '').replace(/##\[/g, `#${String.fromCharCode(0x2060)}#[`).replace(/\|/g, '\\|')}\``;
 }
 
 function b64Cores(s: string, alphabet: 'base64' | 'base64url'): string[] {

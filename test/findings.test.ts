@@ -15,6 +15,7 @@ import { PathSet, pointer, resolveLocalRef, schemaNodes } from '../src/schema-wa
 import type { CatalogTool } from '../src/snapshot.js';
 import { loadTokenizer } from '../src/tokenize.js';
 import { keywordProblems, validateValue } from '../src/validate.js';
+import { budget } from './helpers/time.js';
 
 const rules = (fs: Finding[]): string[] => fs.map((f) => `${f.rule} ${f.path}`);
 
@@ -279,7 +280,7 @@ describe('untyped, escaped JSON, annotations, output duplication', () => {
     expect(analyzeTool({ name: 't', description: long, inputSchema: { type: 'object' } }, { maxDescriptionBytes: 50_000 }).findings.some((f) => f.rule === 'description-oversize')).toBe(false);
     const started = Date.now();
     const evil = analyzeTool({ name: 't', inputSchema: { type: 'object', properties: { p: { type: 'string', pattern: '^(a+)+$', default: `${'a'.repeat(40)}!` } } } });
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now() - started).toBeLessThan(budget(1000));
     expect(evil.findings.map((f) => f.rule)).toContain('default-unchecked');
     expect(evil.findings.some((f) => f.rule === 'default-invalid')).toBe(false);
     const hugeDrf = `* \`a\` - A\n${'y'.repeat(1 << 20)}`;
