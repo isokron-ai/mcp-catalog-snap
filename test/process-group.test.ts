@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { budget } from './helpers/time.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const STUBBORN = fileURLToPath(new URL('./fixtures/servers/stubborn.mjs', import.meta.url));
@@ -24,7 +25,7 @@ function cli(args: string[], env: NodeJS.ProcessEnv = {}) {
   const t0 = Date.now();
   const r = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
-    timeout: 30_000,
+    timeout: budget(15_000),
     cwd: mkdtempSync(join(tmpdir(), 'mcs-pg-')),
     env: { PATH: process.env['PATH'] ?? '', ...env },
   });
@@ -38,7 +39,7 @@ describe.skipIf(process.platform === 'win32')('process group', () => {
     expect(r.timedOut).toBe(false);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/did not finish within 2000 ms/);
-    expect(r.ms).toBeLessThan(12_000);
+    expect(r.ms).toBeLessThan(budget(12_000));
     expect(alive(m)).toBe(false);
   });
 
@@ -47,7 +48,7 @@ describe.skipIf(process.platform === 'win32')('process group', () => {
     const r = cli(['hash', '--timeout-total', '2000', '--', 'sh', '-c', `sleep ${secs} & exec "${process.execPath}" "${STUBBORN}" x`]);
     expect(r.timedOut).toBe(false);
     expect(r.code).toBe(2);
-    expect(r.ms).toBeLessThan(12_000);
+    expect(r.ms).toBeLessThan(budget(12_000));
     expect(alive(`sleep ${secs}`)).toBe(false);
   });
 
@@ -57,7 +58,7 @@ describe.skipIf(process.platform === 'win32')('process group', () => {
       const r = cli(['hash', '--timeout-total', '2000', '--', 'sh', '-c', `setsid sleep ${secs} & exec "${process.execPath}" "${STUBBORN}" x`]);
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(2);
-      expect(r.ms).toBeLessThan(12_000);
+      expect(r.ms).toBeLessThan(budget(12_000));
     } finally {
       spawnSync('pkill', ['-f', `sleep ${secs}`]);
     }
@@ -69,7 +70,7 @@ describe.skipIf(process.platform === 'win32')('process group', () => {
     const r = cli(['hash', '--', 'sh', '-c', `sleep ${secs} & exec "${process.execPath}" "${KRONICLE}" serve --data-dir "${data}"`]);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toMatch(/^[0-9a-f]{64}$/);
-    expect(r.ms).toBeLessThan(12_000);
+    expect(r.ms).toBeLessThan(budget(12_000));
     expect(alive(`sleep ${secs}`)).toBe(false);
   });
 });
