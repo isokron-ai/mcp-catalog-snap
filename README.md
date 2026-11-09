@@ -241,15 +241,27 @@ U+2028/9, bidi and invisible characters and `##[` as `\u` escapes: the
 same values, nothing hidden from a human reading the file or a diff. Error messages are
 one line of at most 1,000 characters.
 
-**Credentials.** Bearer tokens and other credential headers (and
-credential-looking `--env` values of 8+ characters for stdio children) are
+**Credentials.** Bearer tokens and other credential headers, credential-named
+URL query values (`?api_key=`, `?token=`, `?sig=`, `X-Amz-Signature`,
+`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credential-named stdio
+arguments (`--token X`, `--api-key=X`) and credential-looking `--env` values
+(all of 8+ characters) are
 scrubbed from the report and diff data before anything is formatted, and
 again from everything any command prints or writes, in raw, markdown,
 JSON-pointer, JSON, percent-encoded and base64 forms, including text the
 server echoes back. A catalog that embeds the request's credential is
 refused rather than written to a snapshot or raw dump. Credential headers
-shorter than 8 characters are refused. Report sources keep only the URL origin
-and path, with credential-looking path segments masked.
+shorter than 8 characters are refused, and so is a `--url` with
+`user:password@`. Report sources and every message label a target by URL
+origin and path (credential-looking path segments masked, any query shown
+only as `[query redacted]`) or by the stdio command's basename and arguments
+(`--token X`, `--api-key=X` and credential-looking values shown as `***`,
+URLs as origin + path; the sweep report's `source` keeps the basename
+only). URLs inside server and SDK error text are reduced the same way, and
+every `?k=v` value in error text is shown as `***` whatever its name, so a
+4xx body that repeats the request target (`/mcp?pwd=…`) cannot echo it.
+Argument errors (`--header`, `--env` without a separator) never show the
+value. `hash FILE` together with `--url` or `-- command` is an error.
 
 Exit codes: **0** swept, within budget · **2** error · **3** `--from`
 snapshot failed its integrity check · **4** an explicit budget was exceeded.

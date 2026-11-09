@@ -15,6 +15,7 @@ import { basename, extname } from 'node:path';
 
 import { capture, type CaptureOptions, type Target } from '../capture.js';
 import { fingerprint } from '../canonical.js';
+import { safeUrl } from '../redact.js';
 import { SNAPSHOT_FORMAT, SnapshotIntegrityError, normalizeCatalog, parseSnapshot } from '../snapshot.js';
 import type { SourceInfo, SweepInput } from './types.js';
 
@@ -22,38 +23,10 @@ export const TOOLS_LIST_ADAPTER = 'tools-list';
 const WIRE_LABEL = 'canonical JSON (RFC 8785) of each whole tools/list entry, icons and _meta included';
 const MODEL_VISIBLE_LABEL = 'canonical JSON (RFC 8785) of the fields clients pass to the model';
 
-/**
- * A path segment that looks like a credential (some servers put API keys
- * in the URL path): 16+ chars mixing letters and digits, or long hex.
- */
-function looksSecret(seg: string): boolean {
-  const s = decodeSafe(seg);
-  if (s.length < 16) return false;
-  if (/^[0-9a-f]{16,}$/i.test(s)) return true;
-  return /[A-Za-z]/.test(s) && /\d/.test(s) && /^[A-Za-z0-9_\-.~+=]+$/.test(s);
-}
-
-function decodeSafe(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-}
-
 /** Source description without credentials: URL origin + path (credential-looking segments masked), stdio command basename only. */
 export function sourceOf(target: Target): SourceInfo {
   if (target.kind === 'stdio') return { kind: 'stdio', command: basename(target.command) };
-  try {
-    const u = new URL(target.url);
-    const path = u.pathname
-      .split('/')
-      .map((seg) => (looksSecret(seg) ? '***' : seg))
-      .join('/');
-    return { kind: 'http', url: `${u.origin}${path}` };
-  } catch {
-    return { kind: 'http', url: '<invalid url>' };
-  }
+  return { kind: 'http', url: safeUrl(target.url) };
 }
 
 function asObject(v: unknown): Record<string, unknown> | null {

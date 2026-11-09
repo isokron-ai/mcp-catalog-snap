@@ -199,6 +199,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
         return await cmdSweep(sweepOptions(args, target), io);
       case 'hash': {
         const file = args.positional[0];
+        if (file !== undefined && target !== undefined) throw new Error('give a snapshot FILE or a live target (--url or -- command), not both');
         return await cmdHash({ ...common, ...optional('file', file), json: false }, io);
       }
       default:

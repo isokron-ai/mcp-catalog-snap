@@ -11,12 +11,16 @@
 import { writeFileSync } from 'node:fs';
 
 import type { Target } from './capture.js';
-import { UNSAFE_TEXT } from './safe-text.js';
+import { UNSAFE_TEXT, decodeSafe, looksSecret, safeUrl, scrubErrorText } from './safe-text.js';
+
+export { looksSecret, safeUrl };
 
 /** Header names whose values are credentials. */
 const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|api-key)$|token|secret|key|auth|session|password/i;
 /** Env var names (stdio children) whose values are credentials. */
 const CREDENTIAL_ENV = /token|secret|key|auth|pass|cookie|session|credential/i;
+/** URL query parameter names whose values are credentials (signed-URL and OAuth styles included: sig, X-Amz-Signature, X-Goog-Credential, code, jwt, pat). */
+const CREDENTIAL_QUERY = /token|secret|key|auth|pass|cookie|session|credential|sig|jwt|bearer|^code$|^pat$/i;
 /**
  * Credentials shorter than this cannot be scrubbed without masking ordinary
  * text (and hex hashes), so a credential *header* shorter than this is
@@ -27,7 +31,70 @@ export const MIN_SECRET = 8;
 
 export const REDACTED = '***';
 
-/** Secret values a target carries: credential header values (and the part after the scheme), credential env values. */
+/**
+ * URL credentials: the password and credential-named query values. (Only
+ * names decide: these values also make a catalog that echoes them be
+ * refused, so a guess would refuse ordinary ids. Credential-looking path
+ * segments are masked wherever a URL is shown instead; see `safeUrl`.)
+ */
+function urlSecrets(url: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  if (u.password) out.push(u.password, decodeSafe(u.password));
+  for (const [k, v] of u.searchParams) if (CREDENTIAL_QUERY.test(k)) out.push(v);
+  return out;
+}
+
+/**
+ * Stdio arguments for display: the value after a credential-named flag
+ * (`--token X`, `--api-key=X`) and any credential-looking argument become
+ * `***`; URLs keep origin + path only.
+ */
+export function maskedArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = /^(--?[A-Za-z0-9_.-]+)=(.*)$/.exec(a);
+    if (eq) {
+      out.push(CREDENTIAL_ENV.test(eq[1]!) || looksSecret(eq[2]!) ? `${eq[1]}=${REDACTED}` : `${eq[1]}=${scrubErrorText(eq[2]!)}`);
+    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a) && args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) {
+      out.push(a, REDACTED);
+      i++;
+    } else {
+      out.push(looksSecret(a) ? REDACTED : scrubErrorText(a));
+    }
+  }
+  return out;
+}
+
+/** Stdio arguments of credential-named flags: `--token X`, `--api-key=X`. */
+function argSecrets(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const eq = /^--?([A-Za-z0-9_.-]+)=(.+)$/.exec(a);
+    if (eq) {
+      if (CREDENTIAL_ENV.test(eq[1]!)) out.push(eq[2]!);
+    } else if (/^--?[A-Za-z0-9_.-]+$/.test(a) && CREDENTIAL_ENV.test(a)) {
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        out.push(next);
+        i++;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Secret values a target carries: credential header values (and the part
+ * after the scheme), URL credentials, credential env values and arguments.
+ */
 export function targetSecrets(t: Target | undefined): string[] {
   const out: string[] = [];
   if (t?.kind === 'http') {
@@ -37,8 +104,10 @@ export function targetSecrets(t: Target | undefined): string[] {
       const m = /^\S+\s+(.+)$/.exec(v);
       if (m) out.push(m[1]!);
     }
+    out.push(...urlSecrets(t.url));
   } else if (t?.kind === 'stdio') {
     for (const [k, v] of Object.entries(t.env ?? {})) if (CREDENTIAL_ENV.test(k)) out.push(v);
+    out.push(...argSecrets(t.args));
   }
   return normalizeSecrets(out);
 }

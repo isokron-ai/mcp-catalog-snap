@@ -44,9 +44,9 @@ export function visible(s: string): string {
 /** Default cap for one error line. */
 export const MAX_ERROR_CHARS = 1000;
 
-/** An error message as one visible line: line breaks (with their indentation) become one space, the rest is escaped, then capped. */
+/** An error message as one visible line: URLs reduced to origin + path (`scrubUrls`), line breaks (with their indentation) become one space, the rest is escaped, then capped. */
 export function oneLine(s: string, max = MAX_ERROR_CHARS): string {
-  const v = visible(s.replace(/[ \t]*\r?\n[ \t]*/g, ' '));
+  const v = visible(scrubErrorText(s).replace(/[ \t]*\r?\n[ \t]*/g, ' '));
   return v.length > max ? `${v.slice(0, max - 1)}…` : v;
 }
 
@@ -72,6 +72,66 @@ export function terminalSafe(text: string): string {
       return rest.startsWith('::') || /^ {0,3}(```|~~~)/.test(line) ? `${lead}\\${rest}` : line;
     })
     .join('\n');
+}
+
+/**
+ * A value that looks like a credential on its own (some servers put API
+ * keys in the URL path or take them as a bare argument): 16+ chars mixing
+ * letters and digits, or long hex.
+ */
+export function looksSecret(value: string): boolean {
+  const s = decodeSafe(value);
+  if (s.length < 16) return false;
+  if (/^[0-9a-f]{16,}$/i.test(s)) return true;
+  return /[A-Za-z]/.test(s) && /\d/.test(s) && /^[A-Za-z0-9_\-.~+=]+$/.test(s);
+}
+
+export function decodeSafe(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * A URL for display: origin and path only (no user:password@), credential-
+ * looking path segments masked, and any query replaced by a marker (query
+ * strings carry signatures and tokens under too many names to list).
+ * `inline` writes the marker as `?[query redacted]` for use inside text.
+ */
+export function safeUrl(url: string, inline = false): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname
+      .split('/')
+      .map((seg) => (looksSecret(seg) ? '***' : seg))
+      .join('/');
+    const query = u.search ? (inline ? '?[query redacted]' : ' [query redacted]') : '';
+    return `${u.origin}${path}${query}`;
+  } catch {
+    return '<invalid url>';
+  }
+}
+
+/**
+ * Error text from a server or the SDK, made safe to show: every http(s) URL
+ * reduced to `safeUrl` form, then the value of every remaining `?k=v` /
+ * `&k=v` pair (scheme-less request targets like `/mcp?pwd=…`, `host/x?q=…`)
+ * replaced by `***`, whatever the parameter is called.
+ */
+export function scrubErrorText(text: string): string {
+  return scrubUrls(text).replace(/([?&][^\s=&#?"'<>]+)=[^\s&#"'<>]*/g, '$1=***');
+}
+
+/** Every http(s) URL inside free text (server or SDK error messages) reduced to `safeUrl` form; trailing punctuation is kept. */
+export function scrubUrls(text: string): string {
+  return text.replace(/\bhttps?:\/\/[^\s"'<>()[\]{}]+/gi, (m) => {
+    const tail = /[.,;:!?]+$/.exec(m)?.[0] ?? '';
+    const url = tail ? m.slice(0, -tail.length) : m;
+    const safe = safeUrl(url, true);
+    return `${safe === '<invalid url>' ? '<url>' : safe}${tail}`;
+  });
 }
 
 /**

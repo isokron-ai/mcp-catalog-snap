@@ -28,7 +28,7 @@ import {
   snapshotSelfConsistent,
   type Snapshot,
 } from './snapshot.js';
-import { jsonSafe, oneLine, visible } from './safe-text.js';
+import { jsonSafe, oneLine, scrubErrorText, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 
@@ -246,7 +246,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       }
     } catch (err) {
       const tampered = err instanceof SnapshotIntegrityError;
-      const r: ServerResult = { server: label, ok: false, drift: false, error: (err as Error).message };
+      const r: ServerResult = { server: label, ok: false, drift: false, error: scrubErrorText((err as Error).message) };
       if (tampered) {
         r.tampered = true;
         r.snapshotPath = err.path;

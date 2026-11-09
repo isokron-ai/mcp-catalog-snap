@@ -74,6 +74,27 @@ uses semantic versioning once past 0.x.
 
 ### Security
 
+- Credentials in a URL or a stdio command line no longer reach output.
+  `snapshot` / `check` error lines printed the full command line
+  (`-- server --token …`) and the full URL with its query (`?api_key=…`),
+  and `check --json` / `--report` stored them as the server label; config
+  `${VAR}` expansion puts CI secrets exactly there. Targets are now labelled
+  by command basename or URL origin + masked path; credential-named query
+  values and `--token`-style arguments join the scrubbed secrets (so a
+  server echoing them is refused for snapshots and scrubbed elsewhere); a
+  `--url` with `user:password@` is refused up front (fetch rejected it
+  anyway, quoting the password). Query strings are never echoed: labels,
+  report sources and every URL inside error text (a 4xx body repeating the
+  request URL) show origin + masked path + `[query redacted]`; signed-URL
+  and OAuth names (`sig`, `X-Amz-Signature`, `X-Goog-Credential`, `code`,
+  `jwt`, `pat`, …) are scrubbed credentials. Every `?k=v` value inside error
+  text is `***` (scheme-less `/mcp?pwd=…` too). A mistyped
+  `--header "Authorization=Bearer …"` or `--env "TOKEN:…"` no longer echoes
+  the value. `hash FILE --url U` is refused instead of ignoring `--url`.
+  Error labels show the stdio command and its arguments with credentials
+  masked (`srv --profile ro --token ***`) so the failing server is
+  identifiable (dogfood CS-11; the earlier fix showed `srv …`).
+
 - Server text printed to a terminal or CI log is neutralized. `check`
   printed tool names and property paths raw: a name containing a newline
   injected GitHub Actions workflow commands (`::warning::`,
