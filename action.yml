@@ -3,7 +3,7 @@ description: >-
   Re-capture an MCP server's tools/prompts/resource-template catalog and fail
   the job if it drifted from the committed .mcp-catalog snapshot (catalog drift
   silently invalidates prompt-cache prefixes and changes agent behavior).
-author: 'Joshua Bryan'
+author: 'IsoKron'
 branding:
   icon: 'camera'
   color: 'orange'
