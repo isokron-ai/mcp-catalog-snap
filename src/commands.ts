@@ -202,6 +202,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   const policy: DriftPolicy = {
     ignoreDescriptions: opts.ignoreDescriptions ?? false,
     allowAdditions: opts.allowAdditions ?? false,
+    allowWriteAdditions: opts.allowWriteAdditions ?? false,
   };
   const results: ServerResult[] = [];
 
@@ -263,7 +264,11 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   const report: CheckReport = {
     tool: `mcp-catalog-snap/${VERSION}`,
     ok: !anyError && !anyDrift,
-    policy: { ignoreDescriptions: policy.ignoreDescriptions ?? false, allowAdditions: policy.allowAdditions ?? false },
+    policy: {
+      ignoreDescriptions: policy.ignoreDescriptions ?? false,
+      allowAdditions: policy.allowAdditions ?? false,
+      allowWriteAdditions: policy.allowWriteAdditions ?? false,
+    },
     servers: scrubDeep(results, io.variants()),
   };
   if (opts.reportFile !== undefined) {

@@ -43,12 +43,37 @@ export interface SectionDiff {
   changed: ChangedEntry[];
 }
 
+/**
+ * What a tool may do, from its annotations (MCP spec defaults: a tool is not
+ * read-only unless `readOnlyHint` is true, and a non-read-only tool is
+ * destructive unless `destructiveHint` is false).
+ */
+export type ToolSafety = 'read-only' | 'write' | 'destructive';
+
+const SAFETY_RANK: Record<ToolSafety, number> = { 'read-only': 0, write: 1, destructive: 2 };
+
+export function toolSafety(tool: unknown): ToolSafety {
+  const a = isObject(tool as JsonValue) ? (tool as { [k: string]: JsonValue })['annotations'] : undefined;
+  const ann = isObject(a) ? a : {};
+  if (Object.hasOwn(ann, 'readOnlyHint') && ann['readOnlyHint'] === true) return 'read-only';
+  return Object.hasOwn(ann, 'destructiveHint') && ann['destructiveHint'] === false ? 'write' : 'destructive';
+}
+
+export interface SafetyDiff {
+  /** Every added tool with its classification. */
+  added: { key: string; safety: ToolSafety }[];
+  /** Tools present on both sides whose classification got less safe. */
+  lessSafe: { key: string; before: ToolSafety; after: ToolSafety }[];
+}
+
 export interface CatalogDiff {
   /** Canonical bytes identical. */
   identical: boolean;
   fingerprint: { before: string; after: string };
   counts: { before: Record<Section, number>; after: Record<Section, number> };
   sections: SectionDiff[];
+  /** Tool annotations: what added tools may do, and tools that became less safe. */
+  safety: SafetyDiff;
 }
 
 export interface DriftPolicy {
@@ -62,6 +87,13 @@ export interface DriftPolicy {
    * so those additions are not waived (an emptied snapshot must not pass).
    */
   allowAdditions?: boolean;
+  /**
+   * With `allowAdditions`, also waive added tools that are not read-only
+   * (write or destructive). Without it, `allowAdditions` waives only added
+   * tools with `readOnlyHint: true`: a read-only mode that fails open must
+   * not pass as "additions".
+   */
+  allowWriteAdditions?: boolean;
 }
 
 export interface Verdict {
@@ -160,7 +192,25 @@ export function diffCatalogs(before: Catalog, after: Catalog): CatalogDiff {
       after: { tools: after.tools.length, prompts: after.prompts.length, resourceTemplates: after.resourceTemplates.length },
     },
     sections: SECTIONS.map((s) => diffSection(before, after, s)),
+    safety: safetyDiff(before, after),
   };
+}
+
+export function safetyDiff(before: Catalog, after: Catalog): SafetyDiff {
+  const b = indexSection(before, 'tools');
+  const a = indexSection(after, 'tools');
+  const added = [...a.keys()]
+    .filter((k) => !b.has(k))
+    .sort()
+    .map((key) => ({ key, safety: toolSafety(a.get(key)) }));
+  const lessSafe: SafetyDiff['lessSafe'] = [];
+  for (const key of [...a.keys()].sort()) {
+    if (!b.has(key)) continue;
+    const was = toolSafety(b.get(key));
+    const now = toolSafety(a.get(key));
+    if (SAFETY_RANK[now] > SAFETY_RANK[was]) lessSafe.push({ key, before: was, after: now });
+  }
+  return { added, lessSafe };
 }
 
 const SINGULAR: Record<Section, string> = {
@@ -194,7 +244,17 @@ export function evaluate(diff: CatalogDiff, policy: DriftPolicy = {}): Verdict {
       );
     }
     for (const k of s.added) {
-      (waiveAdditions ? waived : reasons).push(`${noun} added: ${k}`);
+      const safety = s.section === 'tools' ? diff.safety.added.find((x) => x.key === k)?.safety : undefined;
+      if (safety && safety !== 'read-only') {
+        // never waived by --allow-additions alone
+        const msg = `${noun} added (${safety}, not read-only): ${k}`;
+        (waiveAdditions && policy.allowWriteAdditions === true ? waived : reasons).push(msg);
+      } else {
+        (waiveAdditions ? waived : reasons).push(`${noun} added: ${k}`);
+      }
+    }
+    if (s.section === 'tools') {
+      for (const x of diff.safety.lessSafe) reasons.push(`tool became less safe: ${x.key} (${x.before} -> ${x.after})`);
     }
     for (const c of s.changed) {
       const structural = c.changes.filter((x) => !x.descriptive);

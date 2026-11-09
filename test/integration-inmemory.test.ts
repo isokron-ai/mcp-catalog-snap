@@ -154,8 +154,10 @@ describe('capture over InMemoryTransport', () => {
     const after = buildSnapshot(await captureDemo({ extraTool: true }));
     const d = diffCatalogs(before.catalog, after.catalog);
     expect(d.sections[0]!.added).toEqual(['extra']);
-    expect(evaluate(d).reasons).toEqual(['tool added: extra']);
-    expect(evaluate(d, { allowAdditions: true }).drift).toBe(false);
+    // registered without annotations: per the spec it may write, so allowAdditions alone does not waive it
+    expect(evaluate(d).reasons).toEqual(['tool added (destructive, not read-only): extra']);
+    expect(evaluate(d, { allowAdditions: true }).drift).toBe(true);
+    expect(evaluate(d, { allowAdditions: true, allowWriteAdditions: true }).drift).toBe(false);
     // and the reverse direction is a removal, which nothing waives
     const r = diffCatalogs(after.catalog, before.catalog);
     expect(evaluate(r, { allowAdditions: true, ignoreDescriptions: true }).reasons).toEqual(['tool removed: extra']);

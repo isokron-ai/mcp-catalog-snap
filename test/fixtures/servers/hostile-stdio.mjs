@@ -2,6 +2,7 @@
 // Hostile stdio MCP server for tests: raw newline-delimited JSON-RPC (no SDK), so it can misbehave.
 // MODE=slowpages: every tools/list page takes 200 ms and points to another page.
 // MODE=deep: one tool whose schema nests DEPTH (default 50,000) levels.
+// MODE=readonly: READ_ONLY=1 lists read tools only; unset adds write/destructive/unannotated tools (LESS_SAFE=1 also flips list_issues).
 // MODE=big: tools/list answers with one ~1 MiB line (tests set a smaller message cap).
 // MODE=names: one tool; with ADD=1 also a tool whose name and property carry newlines, workflow commands and terminal escapes.
 // MODE=legacy: tool names with `##[cmd]` (runner legacy commands) and ZWSP/RLO/U+2028/NEL/NBSP.
@@ -48,6 +49,22 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const n = Number(process.env.DEPTH ?? 50000);
     const open = '{"type":"object","properties":{"a":';
     process.stdout.write(`{"jsonrpc":"2.0","id":${JSON.stringify(msg.id)},"result":{"tools":[{"name":"deep","inputSchema":${open.repeat(n)}{"type":"string"}${'}}'.repeat(n)}}]}}\n`);
+  } else if (msg.method === 'tools/list' && MODE === 'readonly') {
+    // github-mcp-server issue 3747 shape: with READ_ONLY=yes only read tools; without it (fail-open) write and destructive tools appear
+    const ro = { readOnlyHint: true };
+    const tools = [
+      { name: 'get_me', inputSchema: { type: 'object' }, annotations: ro },
+      { name: 'list_issues', inputSchema: { type: 'object' }, annotations: process.env.READ_ONLY ? ro : { ...ro, readOnlyHint: process.env.LESS_SAFE ? false : true } },
+    ];
+    if (!process.env.READ_ONLY) {
+      tools.push(
+        { name: 'search_code', inputSchema: { type: 'object' }, annotations: ro },
+        { name: 'merge_pull_request', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false, destructiveHint: false } },
+        { name: 'delete_file', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false, destructiveHint: true } },
+        { name: 'create_issue', inputSchema: { type: 'object' } },
+      );
+    }
+    out({ jsonrpc: '2.0', id: msg.id, result: { tools } });
   } else if (msg.method === 'tools/list' && MODE === 'big') {
     out({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'big', description: 'x'.repeat(1 << 20), inputSchema: { type: 'object' } }] } });
   } else {

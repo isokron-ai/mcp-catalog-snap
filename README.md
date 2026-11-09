@@ -80,7 +80,7 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 | command | does |
 | --- | --- |
 | `snapshot [-- cmd …] [--url U]` | capture → `.mcp-catalog/<server>.json` (`--name`, `--dir`, `--no-write`) |
-| `check [--server N] [--ignore-descriptions] [--allow-additions] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
+| `check [--server N] [--ignore-descriptions] [--allow-additions [--allow-write-additions]] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
 | `diff A.json B.json [--json]` | diff two snapshot files |
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
 | `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
@@ -114,6 +114,18 @@ Policy flags:
   lists *no* entries in a section (say, `"tools": []`) and the live server
   lists some, that section was never checked, so its additions still count
   as drift. Re-snapshot if the server really gained its first prompt.
+  It waives only added tools with `readOnlyHint: true`: an added tool that
+  can write still drifts unless `--allow-write-additions` is given too.
+- **Tool safety.** Every added tool is classified from its annotations
+  (MCP defaults: not read-only unless `readOnlyHint: true`; a non-read-only
+  tool is destructive unless `destructiveHint: false`) and marked
+  `[read-only]`, `[write]` or `[destructive]`. Added tools that can write,
+  and tools whose annotations moved toward write/destructive, are listed
+  first as `SAFETY:` lines, are drift reasons of their own, sit in the
+  JSON diff under `safety`, and get their own heading and `::error` in the
+  Action. This is the shape of a read-only deployment failing open (e.g.
+  github-mcp-server issue 3747, `GITHUB_READ_ONLY=yes` ignored): the
+  snapshot holds the read tools and the live server lists write tools too.
 
 Every command that reads a snapshot file (`check`, `diff`, `hash FILE`)
 first recomputes the sha256 of its `catalog` and compares it with the

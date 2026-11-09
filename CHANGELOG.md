@@ -10,6 +10,19 @@ uses semantic versioning once past 0.x.
 
 ### Added
 
+- **Annotation-aware drift** (dogfood CS-1/2). `check` and `diff` classify
+  added tools from their annotations (`read-only` / `write` /
+  `destructive`; absent hints default to not read-only and destructive, per
+  the spec), mark them in the listing, lead with `SAFETY:` lines, and treat
+  added non-read-only tools and tools whose annotations got less safe as
+  drift reasons of their own. `--allow-additions` no longer waives an added
+  tool that can write; that needs `--allow-write-additions` (action input
+  `allow-write-additions`). JSON diffs carry `safety`; the Action adds a
+  heading and an `::error` for each. Repro: a read-only baseline checked
+  against a server whose read-only mode failed open (github-mcp-server
+  issue 3747) printed "+19 added" with no marker and passed with
+  `--allow-additions`.
+
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
   separate measures per tool and in totals: `wire` (canonical JSON of the
   whole `tools/list` entry, icons and `_meta` included) and `modelVisible`

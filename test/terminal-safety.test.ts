@@ -257,6 +257,8 @@ describe('CLI end to end (hostile stdio server)', () => {
     // the only workflow command in the log is the action's own
     expect(log.split('\n').filter((l) => l.trimStart().startsWith('::'))).toEqual([
       '::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)',
+      // the added tool has no annotations: per the spec it may write and destroy
+      '::error title=MCP catalog: tools that can write were added::1 added tool(s) are not read-only (1 destructive); see the step summary',
     ]);
     const md = readFileSync(summary, 'utf8');
     expect(md).not.toMatch(CONTROL);
@@ -272,7 +274,7 @@ describe('CLI end to end (hostile stdio server)', () => {
     expect(r.code).toBe(1);
     assertTerminalSafe(r.stdout);
     assertTerminalSafe(r.stderr);
-    expect(r.stdout).toContain('tool added: x\\n::warning');
+    expect(r.stdout).toContain('tool added (destructive, not read-only): x\\n::warning');
   });
 
   it('server error messages are one bounded, escaped line (sweep, snapshot, check, hash)', () => {

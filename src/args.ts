@@ -31,6 +31,7 @@ export const BOOLEAN: ReadonlySet<string> = new Set([
   'update',
   'anthropic',
   'count-annotations',
+  'allow-write-additions',
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

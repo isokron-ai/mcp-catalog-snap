@@ -45,7 +45,9 @@ Target options (snapshot / check / hash):
 
 check / diff options:
   --ignore-descriptions do not treat description-only changes as drift
-  --allow-additions     do not treat added tools/prompts/templates as drift (a section
+  --allow-write-additions  with --allow-additions, also waive added tools that are not
+                        read-only (write/destructive); without it they always drift
+  --allow-additions     do not treat added read-only tools / prompts / templates as drift (a section
                         the snapshot lists as empty is no baseline: additions there still drift)
   --update              rewrite drifted snapshots (check still exits 1)
   --json                machine-readable output
@@ -132,10 +134,11 @@ function timeoutMs(args: ParsedArgs, key = 'timeout'): number | undefined {
   return n;
 }
 
-function policy(args: ParsedArgs): { ignoreDescriptions: boolean; allowAdditions: boolean; json: boolean } {
+function policy(args: ParsedArgs): { ignoreDescriptions: boolean; allowAdditions: boolean; allowWriteAdditions: boolean; json: boolean } {
   return {
     ignoreDescriptions: bool(args.flags['ignore-descriptions']),
     allowAdditions: bool(args.flags['allow-additions']),
+    allowWriteAdditions: bool(args.flags['allow-write-additions']),
     json: bool(args.flags['json']),
   };
 }

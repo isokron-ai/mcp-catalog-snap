@@ -14,8 +14,8 @@ const MAX_POSITIONALS: Readonly<Record<string, number>> = { snapshot: 0, check: 
 
 export const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   snapshot: [...TARGET, ...CONFIG, 'no-write', 'quiet'],
-  check: [...TARGET, ...CONFIG, 'ignore-descriptions', 'allow-additions', 'update', 'json', 'report', 'quiet'],
-  diff: ['ignore-descriptions', 'allow-additions', 'json'],
+  check: [...TARGET, ...CONFIG, 'ignore-descriptions', 'allow-additions', 'allow-write-additions', 'update', 'json', 'report', 'quiet'],
+  diff: ['ignore-descriptions', 'allow-additions', 'allow-write-additions', 'json'],
   hash: [...TARGET, ...CONFIG],
   sweep: [
     ...TARGET,
