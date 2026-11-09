@@ -399,7 +399,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rafe-walker/mcp-catalog-snap@v0.2.0
+      - uses: isokron-ai/mcp-catalog-snap@v0.2.0
         with:
           servers-config: .mcp-catalog.json   # default
           # ignore-descriptions: 'true'

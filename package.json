@@ -52,11 +52,11 @@
   "author": "IsoKron (https://isokron.ai)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rafe-walker/mcp-catalog-snap.git"
+    "url": "git+https://github.com/isokron-ai/mcp-catalog-snap.git"
   },
-  "homepage": "https://github.com/rafe-walker/mcp-catalog-snap#readme",
+  "homepage": "https://github.com/isokron-ai/mcp-catalog-snap#readme",
   "bugs": {
-    "url": "https://github.com/rafe-walker/mcp-catalog-snap/issues"
+    "url": "https://github.com/isokron-ai/mcp-catalog-snap/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
