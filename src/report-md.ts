@@ -80,6 +80,7 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   row(['measure', 'bytes', ...tokIds.map((id) => `${id} tokens`)]);
   row(['---', ...Array<string>(tokIds.length + 1).fill('---:')]);
   row(['**model-visible (all tools)**', ...measureCells(r.totals.modelVisible)]);
+  if (r.measurement.modelVisibleFields) row(['model-visible fields, each tokenized on its own (sum)', ...measureCells(r.totals.modelVisibleFieldSum)]);
   row(['wire (whole tools/list entries)', ...measureCells(r.totals.wire)]);
   for (const [f, m] of Object.entries(r.totals.fields)) row([`field \`${f}\``, ...measureCells(m)]);
   for (const [v, m] of Object.entries(r.totals.views)) row([`view \`${mdText(v)}\``, ...measureCells(m)]);
@@ -89,6 +90,12 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   }
   if (r.totals.wrapper) row([`wrapper tools/list (${r.totals.wrapper.tools.map((t) => mdCode(t)).join(', ')})`, ...measureCells(r.totals.wrapper.wire)]);
   L.push('');
+  if (r.measurement.modelVisibleFields) {
+    L.push(
+      'The whole-object figure tokenizes one JSON object per tool (keys, quotes and the description\'s JSON escaping count, and tokens merge across field boundaries); the field rows tokenize each field on its own (name and description as raw text). The two need not match; budgets use the whole-object figure.',
+    );
+    L.push('');
+  }
   const d = r.totals.modelVisiblePerTool;
   L.push(`Per-tool model-visible (${tk}): median ${n(d.median)}, p90 ${n(d.p90)}, max ${n(d.max)}.`);
   if (r.anthropic) {

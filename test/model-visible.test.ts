@@ -71,6 +71,23 @@ describe('wire vs model-visible (github-mcp-server v2.1.0 fixture)', () => {
     expect(r2.tools[0]!.fields.title).toBeDefined();
   });
 
+  it('reports the per-field sum next to the whole-object figure and explains the gap (dogfood CS-5)', async () => {
+    const toks = await loadTokenizers(['cl100k']);
+    const r = runSweep(await loadSweepInput({ from: GH }), { tokenizers: toks });
+    const f = r.totals.fields;
+    const sum = (k: 'bytes' | 'cl100k'): number =>
+      (['name', 'description', 'inputSchema'] as const).reduce((n, x) => n + (k === 'bytes' ? f[x]!.bytes : f[x]!.tokens['cl100k']!), 0);
+    expect(r.totals.modelVisibleFieldSum.bytes).toBe(sum('bytes'));
+    expect(r.totals.modelVisibleFieldSum.tokens['cl100k']).toBe(sum('cl100k'));
+    expect(r.totals.modelVisibleFieldSum.tokens['cl100k']).not.toBe(r.totals.modelVisible.tokens['cl100k']);
+    expect(r.measurement.modelVisibleFieldSum).toMatch(/one object per tool.*each field on its own/);
+    const md = renderSweepMarkdown(r);
+    expect(md).toMatch(/\| model-visible fields, each tokenized on its own \(sum\) \|/);
+    expect(md).toMatch(/whole-object figure/);
+    const on = runSweep(await loadSweepInput({ from: GH }), { tokenizers: toks, modelVisibleAnnotations: true });
+    expect(on.totals.modelVisibleFieldSum.bytes).toBe(sum('bytes') + f.annotations!.bytes);
+  });
+
   it('icons and _meta change wire but never model-visible', async () => {
     const toks = await loadTokenizers(['cl100k']);
     const stripped = ghTools().map(({ icons: _i, _meta: _m, ...rest }) => rest);

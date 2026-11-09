@@ -57,9 +57,16 @@ uses semantic versioning once past 0.x.
 ### Changed
 
 - A stray positional argument is an error; a named FIFO with no writer
-  fails after 5 s instead of hanging (opened non-blocking); a catalog too
-  deep to pretty-print fails `snapshot` with a clear error instead of
-  "Invalid string length".
+  fails after 5 s instead of hanging (opened non-blocking), and any pipe or
+  FIFO must deliver its input within 30 s (a trickling writer hung the
+  CLI). Snapshot files write values nested 64+ levels deep as compact JSON:
+  a 222 KB tools/list 6,000 levels deep used to produce a 360 MB file that
+  `check`/`diff`/`hash` then refused (64 MiB read cap); `snapshot` also
+  refuses, before writing, any file over that cap.
+- Sweep reports `totals.modelVisibleFieldSum` (each model-visible field
+  tokenized on its own) next to `totals.modelVisible` (one object per tool)
+  and explain the gap in the report and README (dogfood CS-5: 10,732 vs a
+  field-row sum of 11,239 looked like an error).
 - Options are strict (all commands). An unknown option is an error naming
   the closest known one (`sweep --max-tool-token 4000`, a typo, used to run
   with no budget and exit 0); a repeated single-value option is an error;

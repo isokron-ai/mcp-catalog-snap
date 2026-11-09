@@ -91,11 +91,11 @@ single-value option may be given once, numbers are plain decimal integers,
 a stray positional argument is an error (`hash` takes one file, `diff`
 two, the others none), and input files (`--from`, snapshots, config,
 `--call-results`, `--bearer-file`) are read up to 64 MiB (64 KiB for a
-bearer file). Pipes such as `--from <(…)` or `/dev/stdin` work; a named
-FIFO gets 5 s for a writer and then fails instead of hanging; a UTF-8 BOM
-is ignored. A catalog nested too deeply to pretty-print (some 20,000
-levels) cannot be written as a snapshot and fails with a clear error;
-`hash` and `sweep` still handle it.
+bearer file). Pipes such as `--from <(…)` or `/dev/stdin` work but must
+deliver their input within 30 s; a named FIFO gets 5 s for a writer and
+then fails instead of hanging; a UTF-8 BOM is ignored. `snapshot` refuses,
+before writing, a file larger than the 64 MiB that `check`, `diff` and
+`hash` read.
 
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
 for `Authorization: Bearer …` (stdio servers: `--env`; config files:
@@ -158,6 +158,15 @@ stdout is the markdown summary (`--json` prints the JSON report instead).
   to the model, so wire size is a transport cost, not a context cost: on
   github-mcp-server v2.1.0 (91 tools) wire is 119,633 cl100k tokens and
   model-visible 22,347, because the icons are 145 KB of the 260 KB.
+
+**Whole object vs field sum.** Model-visible tokenizes one JSON object
+per tool; the per-field rows tokenize each field on its own (name and
+description as raw text, schemas as JSON). The object form pays for keys,
+quotes and the description's JSON escaping, and tokens merge across field
+boundaries, so the two differ: on github-mcp-server v2.1.0, 22,347
+(object) vs 21,538 (field sum). The report carries both
+(`totals.modelVisible`, `totals.modelVisibleFieldSum`); budgets use the
+object figure.
 
 `annotations` are **not** model-visible by default: they are hints a client
 uses for permissions and UI (Anthropic's tool definition is `name`,
@@ -334,7 +343,11 @@ A schema change reads the same way, with the path that moved:
 
 - Keys are in RFC 8785 order throughout (hence the header fields sorting
   around `catalog`); the file is the canonical form pretty-printed so git
-  diffs stay readable.
+  diffs stay readable. Values nested 64 levels or deeper are written as
+  compact JSON on one line (indentation would otherwise grow quadratically:
+  a 6,000-level schema of 222 KB pretty-printed to 360 MB). Bidi, invisible
+  and C1 characters inside strings are written as `\u` escapes. Neither
+  changes the values or `sha256`.
 - `sha256` covers the compact canonical bytes of `catalog` only. A server
   version bump or a new capture time does not change it. Think of it as the
   **cache-prefix fingerprint**: same hash, same tool bytes.

@@ -9,8 +9,8 @@
  *   - a UTF-8 BOM (Windows editors) made a valid file "not valid JSON".
  */
 
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,10 @@ import { describe, expect, it } from 'vitest';
 
 import { parseArgs } from '../src/args.js';
 import { validateFlags } from '../src/cli-flags.js';
+import { readInputText } from '../src/read-input.js';
+import { buildSnapshot, serializeSnapshot } from '../src/snapshot.js';
+
+import { budget } from './helpers/time.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const FIX = fileURLToPath(new URL('./fixtures/sweep/tools-list.json', import.meta.url));
@@ -93,19 +97,33 @@ describe('positionals', () => {
 });
 
 describe('deep catalogs', () => {
-  it('snapshot of a schema too deep to pretty-print fails with a clear error; hash still works', () => {
-    const env = { MODE: 'deep', DEPTH: '20000' };
-    const run = (args: string[]) => {
+  // 0.2.0-RC: a 222 KB tools/list nested 6,000 levels wrote a 360 MB snapshot (2 spaces of indentation per level,
+  // per line: quadratic) that check / diff / hash FILE then refused (64 MiB read cap). Subtrees below depth 64
+  // are now written compact, and a snapshot over the read cap is refused before anything is written.
+  for (const depth of ['6000', '20000']) {
+    it(`a ${depth}-level schema snapshots to a small file that check, diff and hash FILE read back`, () => {
       const dir = mkdtempSync(join(tmpdir(), 'mcs-deep-'));
-      return spawnSync(process.execPath, [CLI, ...args, '--', process.execPath, HOSTILE], { encoding: 'utf8', cwd: dir, timeout: 60_000, env: { PATH: process.env['PATH'] ?? '', HOME: dir, ...env } });
-    };
-    const s = run(['snapshot', '--name', 'deep']);
-    expect(s.status).toBe(2);
-    expect(s.stderr).toMatch(/too deeply nested to write as a snapshot/);
-    expect(s.stderr).not.toMatch(/Invalid string length/);
-    const h = run(['hash']);
-    expect(h.status).toBe(0);
-    expect(h.stdout.trim()).toMatch(/^[0-9a-f]{64}$/);
+      const env = { PATH: process.env['PATH'] ?? '', HOME: dir, MODE: 'deep', DEPTH: depth };
+      const run = (args: string[], live = true) =>
+        spawnSync(process.execPath, [CLI, ...args, ...(live ? ['--', process.execPath, HOSTILE] : [])], { encoding: 'utf8', cwd: dir, timeout: 120_000, env });
+      const s = run(['snapshot', '--name', 'deep']);
+      expect(s.status, s.stderr).toBe(0);
+      const file = join(dir, '.mcp-catalog', 'deep.json');
+      expect(statSync(file).size).toBeLessThan(2 * 1024 * 1024);
+      expect(run(['check', '--name', 'deep']).status).toBe(0);
+      const live = run(['hash']).stdout.trim();
+      expect(run(['hash', file], false).stdout.trim()).toBe(live);
+      expect(run(['diff', file, file], false).status).toBe(0);
+    });
+  }
+
+  it('a snapshot larger than the read cap is refused before writing', () => {
+    const snap = buildSnapshot(
+      { server: { name: 's', version: '1' }, protocolVersion: null, tools: [{ name: 'a', description: 'x'.repeat(5000), inputSchema: { type: 'object' } }], prompts: [], resourceTemplates: [] },
+      { capturedAt: 't' },
+    );
+    expect(() => serializeSnapshot(snap, { maxBytes: 1000 })).toThrow(/snapshot would be \d+ bytes, over the 1000-byte limit/);
+    expect(serializeSnapshot(snap).length).toBeGreaterThan(5000);
   });
 });
 
@@ -118,7 +136,21 @@ describe('input files', () => {
     const r = spawnSync(process.execPath, [CLI, 'sweep', '--from', fifo], { encoding: 'utf8', timeout: 20_000, env: { PATH: process.env['PATH'] ?? '' } });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/is a FIFO with nothing to read \(no writer within 5 s\)/);
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(Date.now() - t0).toBeLessThan(budget(10_000));
+  });
+
+  it('a FIFO whose writer trickles forever hits the read deadline instead of hanging', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-fifo-'));
+    const fifo = join(dir, 'f.json');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const writer = spawn('bash', ['-c', 'while :; do printf x; sleep 0.2; done > "$F"'], { env: { PATH: process.env['PATH'] ?? '', F: fifo }, stdio: 'ignore', detached: true });
+    try {
+      const t0 = Date.now();
+      expect(() => readInputText(fifo, '--from', 1 << 20, { deadlineMs: 1500 })).toThrow(/did not deliver its input within 1\.5 s/);
+      expect(Date.now() - t0).toBeLessThan(budget(5_000));
+    } finally {
+      process.kill(-writer.pid!, 'SIGKILL');
+    }
   });
 
   it('a FIFO with a writer is read', () => {
