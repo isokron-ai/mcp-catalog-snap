@@ -75,7 +75,8 @@ export function mdEscape(s: string): string {
 
 /** The escaping `mdCode` applies inside a code span. */
 export function mdCodeEscape(s: string): string {
-  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(UNSAFE_TEXT, '').replace(/\|/g, '\\|')}\``;
+  // `##[` is a runner legacy command anywhere in a line: break it with the renderer's own word joiner
+  return `\`${s.replace(/[\r\n\t`]+/g, ' ').replace(UNSAFE_TEXT, '').replace(/##\[/g, `#${String.fromCharCode(0x2060)}#[`).replace(/\|/g, '\\|')}\``;
 }
 
 function b64Cores(s: string, alphabet: 'base64' | 'base64url'): string[] {

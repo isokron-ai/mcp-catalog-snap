@@ -88,7 +88,12 @@ uses semantic versioning once past 0.x.
   version raw (`server version: a -> b`). Every stdout/stderr line now
   passes an output boundary (`terminalSafe`) that escapes terminal-active
   characters and neutralizes lines starting with `::` or a code fence,
-  whatever the call site.
+  whatever the call site, and breaks every `##[` (GitHub's legacy
+  `##[command]` form is honored anywhere in a line: a tool named
+  `n ##[stop-commands]tok` could silence the action's own `::error`).
+  Every JSON output and file (`--json`, `--no-write`, snapshots, reports,
+  `--save-raw`) writes C1, U+2028/9, bidi and invisible characters and
+  `##[` as `\u` escapes (same values when parsed).
 
 - Live capture is bounded (every command that talks to a server): a list
   stops after 1,000 pages or 64 MiB across pages (a server that returned a
