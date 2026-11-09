@@ -406,11 +406,22 @@ exit 2) writes the error to the step summary and fails with an `::error`
 as well. The `report` output is set only when the report file was written. The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
+A stdio server's stderr is forwarded as the server wrote it, so the action
+treats it as untrusted: it is echoed to the job log between
+`::stop-commands::<random token>` and `::<token>::`, so `::error::`,
+`::add-mask::` or `##[…]` lines in it are shown rather than run, and the
+step summary puts it (and the drift output) in a code block whose fence is
+longer than any backtick run in the text, so it cannot close the block.
+
 ### Plain shell
 
 ```yaml
       - run: npx -y mcp-catalog-snap@0.2.0 check
 ```
+
+In a plain `run:` step the server's stderr goes to the log unfiltered (the
+CLI's own output is neutralized, the server's is not); use the action, or
+send it elsewhere with `2> server.err`, if the server is not yours.
 
 When a change is intended, re-run `snapshot` (or `check --update`) and
 commit the new `.mcp-catalog/` file in the same PR; the reviewer sees the

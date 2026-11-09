@@ -186,7 +186,13 @@ uses semantic versioning once past 0.x.
   server's stderr is forwarded through an owned pipe instead of inherited.
 - Action: every exit path writes a step summary and every failure an
   `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
-  had neither); the `report` output is set only when the file exists.
+  had neither); the `report` output is set only when the file exists. The
+  server's stderr, which the CLI forwards as written, is echoed to the log
+  between `::stop-commands::<random token>` and `::<token>::` (a server
+  printing `::error::…`, `::add-mask::…` or `##[…]` had them run by the
+  runner), and the step summary fences it, and the drift output, with a
+  fence longer than any backtick run in the text (a ```` ``` ```` line in
+  server stderr closed the summary's code block).
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

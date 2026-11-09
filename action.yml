@@ -95,7 +95,31 @@ runs:
         rm -f "$report"
         node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" 2>mcp-catalog-check.err | tee mcp-catalog-check.txt
         code=${PIPESTATUS[0]}
-        cat mcp-catalog-check.err >&2
+
+        # The server's stderr reaches mcp-catalog-check.err raw (the CLI forwards it), so it is untrusted:
+        # echo it with workflow-command processing stopped under a token it cannot know, so `::error::`,
+        # `::add-mask::` or `##[...]` lines in it are shown, not run. Same stream as the action's own
+        # `::error` lines below, so the resume line is always processed before them.
+        ensure_nl() { [ -s "$1" ] && [ -n "$(tail -c1 "$1")" ] && echo; return 0; }
+        if [ -s mcp-catalog-check.err ]; then
+          stop_token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          cat mcp-catalog-check.err
+          ensure_nl mcp-catalog-check.err
+          echo "::$stop_token::"
+        fi
+        # A code block for the step summary whose fence is longer than any backtick run in the file,
+        # so a fence in server text cannot close it.
+        fenced() {
+          local n fence
+          n=$(LC_ALL=C grep -oE '`+' "$1" 2>/dev/null | LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+          [ "$n" -lt 3 ] && n=2
+          fence=$(printf '%*s' "$((n + 1))" '' | tr ' ' '`')
+          echo "$fence"
+          cat "$1"
+          ensure_nl "$1"
+          echo "$fence"
+        }
         # only point at a report that was actually written
         [ -f "$report" ] && echo "report=$report" >> "$GITHUB_OUTPUT"
         if [ "$code" -eq 1 ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
@@ -138,9 +162,7 @@ runs:
               echo "## MCP catalog drift detected"
               echo
               safety_summary
-              echo '```'
-              cat mcp-catalog-check.txt
-              echo '```'
+              fenced mcp-catalog-check.txt
               echo
               echo 'Re-snapshot with `npx mcp-catalog-snap snapshot` and commit `.mcp-catalog/` if the change is intended.'
             } >> "$GITHUB_STEP_SUMMARY"
@@ -161,9 +183,7 @@ runs:
             {
               echo "## MCP catalog check could not run (exit $code)"
               echo
-              echo '```'
-              cat mcp-catalog-check.err
-              echo '```'
+              fenced mcp-catalog-check.err
               echo
               echo 'Usual causes: a `${VAR}` in the config that is not set in the job, a server that failed to start, or a timeout.'
             } >> "$GITHUB_STEP_SUMMARY"
