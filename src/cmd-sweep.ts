@@ -30,6 +30,7 @@ export interface SweepCommandOptions {
   target?: Target;
   name?: string;
   timeoutMs?: number;
+  totalTimeoutMs?: number;
   tokenizers?: string[];
   budgetTokenizer?: string;
   maxToolTokens?: number;
@@ -93,6 +94,7 @@ export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<nu
     if (opts.target !== undefined) load.target = opts.target;
     if (opts.name !== undefined) load.name = opts.name;
     if (opts.timeoutMs !== undefined) load.timeoutMs = opts.timeoutMs;
+    if (opts.totalTimeoutMs !== undefined) load.totalTimeoutMs = opts.totalTimeoutMs;
     if (opts.saveRaw !== undefined) {
       load.saveRaw = opts.saveRaw;
       load.secrets = secrets;

@@ -16,6 +16,7 @@ import {
 } from '../src/metrics.js';
 import { buildSnapshot, type CatalogTool } from '../src/snapshot.js';
 import { TOKENIZE_CHUNK, chunkText, loadTokenizer, loadTokenizers, registerTokenizer, utf8Bytes } from '../src/tokenize.js';
+import { budget } from './helpers/time.js';
 
 describe('tokenizers', () => {
   it('cl100k matches python tiktoken cl100k_base counts', async () => {
@@ -60,7 +61,7 @@ describe('tokenizers', () => {
     expect(chunkText(emoji).every((c) => !/[\uD800-\uDBFF]$/.test(c))).toBe(true);
     const started = Date.now();
     expect(t.count('a'.repeat(200_000))).toBeGreaterThan(0);
-    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(Date.now() - started).toBeLessThan(budget(10_000));
   });
 
   it('utf8Bytes counts bytes, not UTF-16 units', () => {

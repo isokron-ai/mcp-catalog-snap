@@ -74,6 +74,25 @@ uses semantic versioning once past 0.x.
 
 ### Security
 
+- Live capture is bounded (every command that talks to a server): a list
+  stops after 1,000 pages or 64 MiB across pages (a server that returned a
+  fresh `nextCursor` forever hung every command with memory growing); one
+  message may be at most 10 MiB on Streamable HTTP too (bodies were
+  unbounded: an endless response grew ~140 MB/s until the timeout), cut by
+  Content-Length or while streaming, with the download cancelled; an
+  oversize stdio message now says so instead of "Connection closed"; a live
+  exec sweep refuses a `tools` listing of more than 2,000 names.
+  `--timeout-total MS` (snapshot, check, hash, sweep; action input
+  `timeout-total-ms`) bounds a whole capture. Stdio servers run in their
+  own process group and every close ends the group (SIGTERM, then SIGKILL
+  after 2 s; Windows: `taskkill /T /F`): before, only the direct child was
+  signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
+  left a grandchild holding the pipes and the CLI never exited. The
+  server's stderr is forwarded through an owned pipe instead of inherited.
+- Action: every exit path writes a step summary and every failure an
+  `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
+  had neither); the `report` output is set only when the file exists.
+
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a
   step budget (one step per comparison) and a byte budget (each value

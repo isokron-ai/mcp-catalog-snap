@@ -326,7 +326,10 @@ jobs:
 
 On drift the job fails, the readable diff goes to the step summary, and the
 `drift` output is `"true"`. A snapshot that fails its integrity check
-fails the job too (exit 3, `drift` stays `"false"`). The action builds the pinned copy of the CLI
+fails the job too (exit 3, `drift` stays `"false"`). Any other failure (a
+`${VAR}` the job does not set, a server that does not start, a timeout;
+exit 2) writes the error to the step summary and fails with an `::error`
+as well. The `report` output is set only when the report file was written. The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
 ### Plain shell
@@ -379,7 +382,30 @@ servers, checked in this repo's own CI:
   capture tool, not a monitor.
 - Streamable HTTP only, for remote servers. The deprecated HTTP+SSE
   transport is not supported; put such servers behind a stdio bridge.
-- Pagination is followed to exhaustion, but a server that emits a
+- Capture is bounded because the server is untrusted: one message (stdio
+  line or HTTP response body) may be at most 10 MiB, one list at most 1,000
+  pages and 64 MiB across them, and every request times out (`--timeout`,
+  default 30 s). `--timeout-total MS` bounds each server's whole capture
+  (default: none, so a slow but valid server can take up to pages ×
+  `--timeout`). A live exec sweep queries at most 2,000 listed names.
+  Past a cap the command fails with exit 2 and says which cap it hit.
+- A stdio server runs in its own process group, and every close (normal
+  end, error, deadline, Ctrl-C) ends the whole group: stdin closed, then
+  SIGTERM, then SIGKILL after 2 s. Wrappers (`npx`, `uvx`, `bash -c`,
+  `sh -c "x & exec y"`) leave no processes behind, and the server's
+  stderr is forwarded through a pipe the CLI closes, so even a process
+  that escaped the group (`setsid`) cannot keep the CLI from exiting. On
+  Windows the tree is ended with `taskkill /T /F` (not covered by CI).
+
+  | cap | value |
+  | --- | --- |
+  | one server message (stdio line / HTTP body) | 10 MiB |
+  | pages per list | 1,000 |
+  | one list across pages | 64 MiB |
+  | per request | `--timeout`, default 30,000 ms |
+  | whole capture | `--timeout-total` (action: `timeout-total-ms`), default none |
+  | live exec names | 2,000 |
+- Pagination is followed to exhaustion (within those caps), but a server that emits a
   non-deterministic order across pages still ends up sorted, so order
   changes are invisible by design (clients do not promise to preserve order
   either).

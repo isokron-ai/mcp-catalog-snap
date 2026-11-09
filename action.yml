@@ -33,6 +33,10 @@ inputs:
     description: 'Per-request timeout in milliseconds.'
     required: false
     default: '30000'
+  timeout-total-ms:
+    description: 'Deadline for each server''s whole capture in milliseconds (empty = none). On expiry the server''s process group is ended.'
+    required: false
+    default: ''
   node-version:
     description: 'Node.js version to set up for the CLI (needs >= 20).'
     required: false
@@ -43,7 +47,7 @@ outputs:
     description: '"true" when any server drifted, else "false".'
     value: ${{ steps.check.outputs.drift }}
   report:
-    description: 'Path to the JSON report written by the check.'
+    description: 'Path to the JSON report written by the check (unset when no report was written, e.g. a config error).'
     value: ${{ steps.check.outputs.report }}
 
 runs:
@@ -72,35 +76,42 @@ runs:
         INPUT_ALLOW_ADDITIONS: ${{ inputs.allow-additions }}
         INPUT_SERVER: ${{ inputs.server }}
         INPUT_TIMEOUT: ${{ inputs.timeout-ms }}
+        INPUT_TIMEOUT_TOTAL: ${{ inputs.timeout-total-ms }}
       run: |
         set +e
         args=(check --config "$INPUT_CONFIG" --timeout "$INPUT_TIMEOUT")
         [ "$INPUT_IGNORE_DESCRIPTIONS" = "true" ] && args+=(--ignore-descriptions)
         [ "$INPUT_ALLOW_ADDITIONS" = "true" ] && args+=(--allow-additions)
         [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
+        [ -n "$INPUT_TIMEOUT_TOTAL" ] && args+=(--timeout-total "$INPUT_TIMEOUT_TOTAL")
 
         report="$RUNNER_TEMP/mcp-catalog-report.json"
-        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" | tee mcp-catalog-check.txt
+        rm -f "$report"
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" 2>mcp-catalog-check.err | tee mcp-catalog-check.txt
         code=${PIPESTATUS[0]}
-        echo "report=$report" >> "$GITHUB_OUTPUT"
+        cat mcp-catalog-check.err >&2
+        # only point at a report that was actually written
+        [ -f "$report" ] && echo "report=$report" >> "$GITHUB_OUTPUT"
+        if [ "$code" -eq 1 ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
 
-        if [ "$code" -eq 1 ]; then
-          echo "drift=true" >> "$GITHUB_OUTPUT"
-          {
-            echo "## MCP catalog drift detected"
-            echo
-            echo '```'
-            cat mcp-catalog-check.txt
-            echo '```'
-            echo
-            echo 'Re-snapshot with `npx mcp-catalog-snap snapshot` and commit `.mcp-catalog/` if the change is intended.'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)"
-        else
-          echo "drift=false" >> "$GITHUB_OUTPUT"
-          if [ "$code" -eq 0 ]; then
+        # every exit path writes a summary; every failure also emits ::error
+        case "$code" in
+          0)
             echo "## MCP catalog: no drift" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$code" -eq 3 ]; then
+            ;;
+          1)
+            {
+              echo "## MCP catalog drift detected"
+              echo
+              echo '```'
+              cat mcp-catalog-check.txt
+              echo '```'
+              echo
+              echo 'Re-snapshot with `npx mcp-catalog-snap snapshot` and commit `.mcp-catalog/` if the change is intended.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)"
+            ;;
+          3)
             {
               echo "## MCP catalog snapshot failed its integrity check"
               echo
@@ -108,7 +119,19 @@ runs:
               echo 'Restore it from git, or re-capture with `npx mcp-catalog-snap snapshot` and review the diff.'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error title=MCP catalog snapshot tampered::stored sha256 does not match the snapshot's catalog body"
-          fi
-        fi
-        rm -f mcp-catalog-check.txt
+            ;;
+          *)
+            {
+              echo "## MCP catalog check could not run (exit $code)"
+              echo
+              echo '```'
+              cat mcp-catalog-check.err
+              echo '```'
+              echo
+              echo 'Usual causes: a `${VAR}` in the config that is not set in the job, a server that failed to start, or a timeout.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=MCP catalog check failed::mcp-catalog-snap exited with code $code; see the step summary"
+            ;;
+        esac
+        rm -f mcp-catalog-check.txt mcp-catalog-check.err
         exit "$code"

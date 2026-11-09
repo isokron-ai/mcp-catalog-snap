@@ -20,6 +20,7 @@ import { analyzeTool } from '../src/findings.js';
 import { normalizeCatalog, type CatalogTool } from '../src/snapshot.js';
 import { runSweep, serializeReport } from '../src/sweep.js';
 import { TOKENIZE_CHUNK, chunkText, loadTokenizer, loadTokenizers } from '../src/tokenize.js';
+import { budget } from './helpers/time.js';
 
 type CanonFn = (v: unknown) => string | undefined;
 const canonicalize: CanonFn =
@@ -34,7 +35,7 @@ function nested(depth: number, leaf: unknown = { type: 'string' }): unknown {
 const within = <T>(ms: number, f: () => T): T => {
   const t0 = Date.now();
   const r = f();
-  expect(Date.now() - t0).toBeLessThan(ms);
+  expect(Date.now() - t0).toBeLessThan(budget(ms));
   return r;
 };
 
@@ -266,7 +267,7 @@ describe('seeded hostile-schema fuzz', () => {
       expect(() => analyzeTool(entry)).not.toThrow();
       const input = parseToolsListFile(JSON.stringify({ tools: [entry] }), 'f.json');
       expect(() => runSweep(input, { tokenizers: [t!] })).not.toThrow();
-      expect(Date.now() - t0, `case ${i}`).toBeLessThan(1_000);
+      expect(Date.now() - t0, `case ${i}`).toBeLessThan(budget(1_000));
     }
   }, 120_000);
 });
