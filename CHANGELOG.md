@@ -82,8 +82,13 @@ uses semantic versioning once past 0.x.
   Content-Length or while streaming, with the download cancelled; an
   oversize stdio message now says so instead of "Connection closed"; a live
   exec sweep refuses a `tools` listing of more than 2,000 names.
-  `--timeout-total MS` (snapshot, check, hash, sweep) bounds a whole
-  capture; on expiry the child or connection is closed.
+  `--timeout-total MS` (snapshot, check, hash, sweep; action input
+  `timeout-total-ms`) bounds a whole capture. Stdio servers run in their
+  own process group and every close ends the group (SIGTERM, then SIGKILL
+  after 2 s; Windows: `taskkill /T /F`): before, only the direct child was
+  signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
+  left a grandchild holding the pipes and the CLI never exited. The
+  server's stderr is forwarded through an owned pipe instead of inherited.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a
