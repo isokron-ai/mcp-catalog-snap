@@ -22,6 +22,7 @@ import { validateFlags } from '../src/cli-flags.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const FIX = fileURLToPath(new URL('./fixtures/sweep/tools-list.json', import.meta.url));
+const HOSTILE = fileURLToPath(new URL('./fixtures/servers/hostile-stdio.mjs', import.meta.url));
 
 function cli(args: string[], input?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'mcs-strict-'));
@@ -76,7 +77,64 @@ describe('options', () => {
   });
 });
 
+describe('positionals', () => {
+  it('a command that takes no (or fewer) file arguments refuses stray ones', () => {
+    for (const [args, re] of [
+      [['snapshot', 'extra'], /unexpected argument "extra" for snapshot/],
+      [['check', 'x.json'], /unexpected argument "x.json" for check/],
+      [['hash', 'a.json', 'b.json'], /unexpected argument "b.json" for hash/],
+      [['diff', 'a', 'b', 'c'], /unexpected argument "c" for diff/],
+    ] as const) {
+      const r = cli([...args]);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stderr, args.join(' ')).toMatch(re);
+    }
+  });
+});
+
+describe('deep catalogs', () => {
+  it('snapshot of a schema too deep to pretty-print fails with a clear error; hash still works', () => {
+    const env = { MODE: 'deep', DEPTH: '20000' };
+    const run = (args: string[]) => {
+      const dir = mkdtempSync(join(tmpdir(), 'mcs-deep-'));
+      return spawnSync(process.execPath, [CLI, ...args, '--', process.execPath, HOSTILE], { encoding: 'utf8', cwd: dir, timeout: 60_000, env: { PATH: process.env['PATH'] ?? '', HOME: dir, ...env } });
+    };
+    const s = run(['snapshot', '--name', 'deep']);
+    expect(s.status).toBe(2);
+    expect(s.stderr).toMatch(/too deeply nested to write as a snapshot/);
+    expect(s.stderr).not.toMatch(/Invalid string length/);
+    const h = run(['hash']);
+    expect(h.status).toBe(0);
+    expect(h.stdout.trim()).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
 describe('input files', () => {
+  it('a FIFO with no writer is a clear error, not a hang', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-fifo-'));
+    const fifo = join(dir, 'f.json');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [CLI, 'sweep', '--from', fifo], { encoding: 'utf8', timeout: 20_000, env: { PATH: process.env['PATH'] ?? '' } });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/is a FIFO with nothing to read \(no writer within 5 s\)/);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+
+  it('a FIFO with a writer is read', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-fifo-'));
+    const fifo = join(dir, 'f.json');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const body = JSON.stringify({ tools: [{ name: 'a', inputSchema: { type: 'object' } }] });
+    const r = spawnSync('bash', ['-c', `(sleep 1; printf '%s' "$BODY" > "$F") & exec "$NODE" "$CLI" sweep --from "$F" --json`], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: { PATH: process.env['PATH'] ?? '', BODY: body, F: fifo, NODE: process.execPath, CLI },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).totals.tools).toBe(1);
+  });
+
   it('are read with a size cap: /dev/zero is a clean error, not an abort', () => {
     const cases: string[][] = [
       ['sweep', '--from', '/dev/zero'],

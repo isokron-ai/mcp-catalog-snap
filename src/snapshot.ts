@@ -167,7 +167,15 @@ export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapsho
 
 /** The bytes written to disk: pretty-printed, key-sorted, trailing newline. */
 export function serializeSnapshot(snap: Snapshot): string {
-  return prettyCanonical(snap);
+  try {
+    return prettyCanonical(snap);
+  } catch (err) {
+    // Indentation grows with depth: a schema some 20,000 levels deep pretty-prints past V8's string limit.
+    if (err instanceof RangeError) {
+      throw new Error('catalog is too deeply nested to write as a snapshot (the indented file would exceed the JavaScript string limit); `hash` and `sweep` still work on it');
+    }
+    throw err;
+  }
 }
 
 /** Parse + validate a snapshot file's text. Throws on a malformed file. */

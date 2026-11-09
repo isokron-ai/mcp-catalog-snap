@@ -6,6 +6,8 @@ uses semantic versioning once past 0.x.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-08
+
 ### Added
 
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
@@ -54,6 +56,10 @@ uses semantic versioning once past 0.x.
 
 ### Changed
 
+- A stray positional argument is an error; a named FIFO with no writer
+  fails after 5 s instead of hanging (opened non-blocking); a catalog too
+  deep to pretty-print fails `snapshot` with a clear error instead of
+  "Invalid string length".
 - Options are strict (all commands). An unknown option is an error naming
   the closest known one (`sweep --max-tool-token 4000`, a typo, used to run
   with no budget and exit 0); a repeated single-value option is an error;
@@ -65,10 +71,10 @@ uses semantic versioning once past 0.x.
   134), now exit 2 with "is larger than … bytes". A UTF-8 BOM is ignored.
   `/dev/stdin` also works when stdin is a socket.
 
-- `package.json` is `0.2.0-dev`, so the report `generator`, the snapshot
-  `capturedWith` and `--version` no longer claim 0.1.1 for unreleased
-  0.2 code; a test keeps the version ahead of the last released one while
-  `[Unreleased]` has entries.
+- The report `generator`, the snapshot `capturedWith` and `--version`
+  name the running version (main said 0.1.1 while shipping 0.2 code); a
+  test keeps `package.json` ahead of the last release while `[Unreleased]`
+  has entries.
 
 - Tokenizer backend is `gpt-tokenizer` (same cl100k/o200k counts, verified
   against Python tiktoken; linear on hostile input) instead of

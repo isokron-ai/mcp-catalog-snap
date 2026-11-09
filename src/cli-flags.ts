@@ -9,6 +9,8 @@ import { BOOLEAN, REPEATABLE, type ParsedArgs } from './args.js';
 const TARGET = ['url', 'header', 'bearer-file', 'bearer-env', 'env', 'cwd', 'timeout', 'timeout-total', 'name'];
 const CONFIG = ['config', 'server', 'dir'];
 const ALWAYS = ['help', 'version'];
+/** Most positional arguments each command takes (hash: one snapshot file; diff: two). */
+const MAX_POSITIONALS: Readonly<Record<string, number>> = { snapshot: 0, check: 0, sweep: 0, hash: 1, diff: 2 };
 
 export const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   snapshot: [...TARGET, ...CONFIG, 'no-write', 'quiet'],
@@ -73,6 +75,10 @@ export function validateFlags(args: ParsedArgs): void {
     throw new Error(`unknown option --${name} for ${args.cmd}${hint ? ` (did you mean --${hint}?)` : ''}; see mcp-catalog-snap --help`);
   }
   for (const name of args.repeated) if (!REPEATABLE.has(name)) throw new Error(`--${name} given more than once`);
+  const extra = args.positional[MAX_POSITIONALS[args.cmd] ?? 0];
+  if (extra !== undefined) {
+    throw new Error(`unexpected argument ${JSON.stringify(extra)} for ${args.cmd}${args.cmd === 'sweep' ? ' (offline input goes in --from FILE)' : ''}`);
+  }
   for (const name of Object.keys(args.flags)) {
     const v = args.flags[name];
     if (BOOLEAN.has(name) && typeof v === 'string' && !['true', 'false', '1', '0'].includes(v)) {

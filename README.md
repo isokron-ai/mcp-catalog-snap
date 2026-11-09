@@ -88,9 +88,14 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 Options are strict: an option the command does not take (a typo such as
 `--max-tool-token`) is an error (exit 2) that names the closest one, a
 single-value option may be given once, numbers are plain decimal integers,
-and input files (`--from`, snapshots, config, `--call-results`,
-`--bearer-file`) are read up to 64 MiB (64 KiB for a bearer file); pipes
-such as `--from <(…)` or `/dev/stdin` work, and a UTF-8 BOM is ignored.
+a stray positional argument is an error (`hash` takes one file, `diff`
+two, the others none), and input files (`--from`, snapshots, config,
+`--call-results`, `--bearer-file`) are read up to 64 MiB (64 KiB for a
+bearer file). Pipes such as `--from <(…)` or `/dev/stdin` work; a named
+FIFO gets 5 s for a writer and then fails instead of hanging; a UTF-8 BOM
+is ignored. A catalog nested too deeply to pretty-print (some 20,000
+levels) cannot be written as a snapshot and fails with a clear error;
+`hash` and `sweep` still handle it.
 
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
 for `Authorization: Bearer …` (stdio servers: `--env`; config files:
@@ -339,7 +344,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rafe-walker/mcp-catalog-snap@v0.1.1
+      - uses: rafe-walker/mcp-catalog-snap@v0.2.0
         with:
           servers-config: .mcp-catalog.json   # default
           # ignore-descriptions: 'true'
@@ -356,7 +361,7 @@ that ships with the tag (no registry lookup at run time).
 ### Plain shell
 
 ```yaml
-      - run: npx -y mcp-catalog-snap@0.1.1 check
+      - run: npx -y mcp-catalog-snap@0.2.0 check
 ```
 
 When a change is intended, re-run `snapshot` (or `check --update`) and
