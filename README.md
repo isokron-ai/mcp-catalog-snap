@@ -537,4 +537,4 @@ See `CONTRIBUTING.md` (DCO sign-off, Apache-2.0).
 
 Part of [IsoKron](https://isokron.ai) — typed-graph substrate for AI agents.
 
-Built off-grid in Cochise County, AZ by a laid-off support engineer — https://theexiledentrepreneur.com
+Built and maintained by [IsoKron](https://isokron.ai).
