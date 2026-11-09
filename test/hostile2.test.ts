@@ -11,25 +11,26 @@ import { mdText } from '../src/report-md.js';
 import type { CatalogTool } from '../src/snapshot.js';
 import { chunkText, loadTokenizers } from '../src/tokenize.js';
 import { validateContext, validateValue } from '../src/validate.js';
+import { budget } from './helpers/time.js';
 
 const tool = (inputSchema: unknown, name = 't'): CatalogTool => ({ name, inputSchema: inputSchema as CatalogTool['inputSchema'] });
 const rules = (fs: Finding[]): string[] => fs.map((f) => f.rule);
 const within = <T>(ms: number, f: () => T): T => {
   const t0 = Date.now();
   const r = f();
-  expect(Date.now() - t0).toBeLessThan(ms);
+  expect(Date.now() - t0).toBeLessThan(budget(ms));
   return r;
 };
 /** Best of 3 runs: bounds the code's cost, not the scheduler's (the suite runs files in parallel). */
 const bestOf3Within = <T>(ms: number, f: () => T): T => {
   let best = Infinity;
   let r: T | undefined;
-  for (let i = 0; i < 3 && best >= ms; i++) {
+  for (let i = 0; i < 3 && best >= budget(ms); i++) {
     const t0 = Date.now();
     r = f();
     best = Math.min(best, Date.now() - t0);
   }
-  expect(best).toBeLessThan(ms);
+  expect(best).toBeLessThan(budget(ms));
   return r!;
 };
 

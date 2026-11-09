@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { POSTHOG_EXEC } from '../src/adapters/index.js';
 import { sweepInputFromExecSession } from '../src/adapters/exec.js';
 import { MAX_PAGES, capture, captureFromTransport, openSessionOnTransport } from '../src/capture.js';
+import { budget } from './helpers/time.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const HOSTILE = fileURLToPath(new URL('./fixtures/servers/hostile-stdio.mjs', import.meta.url));
@@ -57,7 +58,7 @@ describe('pagination caps', () => {
     const t0 = Date.now();
     await expect(captureFromTransport(c)).rejects.toThrow(new RegExp(`tools/list: still paginating after ${MAX_PAGES} pages`));
     expect(served.pages).toBe(MAX_PAGES);
-    expect(Date.now() - t0).toBeLessThan(20_000);
+    expect(Date.now() - t0).toBeLessThan(budget(20_000));
   });
 
   it('stops when the pages add up past the list byte cap', async () => {
@@ -85,7 +86,7 @@ describe('overall deadline (--timeout-total)', () => {
     const t = { kind: 'stdio' as const, command: process.execPath, args: [HOSTILE], env: { MODE: 'slowpages' } };
     const t0 = Date.now();
     await expect(capture(t, { totalTimeoutMs: 1500, stderr: 'ignore' })).rejects.toThrow(/did not finish within 1500 ms \(--timeout-total\)/);
-    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(Date.now() - t0).toBeLessThan(budget(5_000));
   });
 
   it('CLI: snapshot and sweep take --timeout-total', () => {
@@ -98,7 +99,7 @@ describe('overall deadline (--timeout-total)', () => {
       });
       expect(r.status, cmd).toBe(2);
       expect(r.stderr, cmd).toMatch(/did not finish within 1500 ms/);
-      expect(Date.now() - t0).toBeLessThan(8_000);
+      expect(Date.now() - t0).toBeLessThan(budget(8_000));
     }
   });
 });

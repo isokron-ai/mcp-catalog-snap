@@ -110,6 +110,9 @@ uses semantic versioning once past 0.x.
   signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
   left a grandchild holding the pipes and the CLI never exited. The
   server's stderr is forwarded through an owned pipe instead of inherited.
+- Action: every exit path writes a step summary and every failure an
+  `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
+  had neither); the `report` output is set only when the file exists.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

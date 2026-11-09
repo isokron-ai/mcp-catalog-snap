@@ -342,7 +342,10 @@ jobs:
 
 On drift the job fails, the readable diff goes to the step summary, and the
 `drift` output is `"true"`. A snapshot that fails its integrity check
-fails the job too (exit 3, `drift` stays `"false"`). The action builds the pinned copy of the CLI
+fails the job too (exit 3, `drift` stays `"false"`). Any other failure (a
+`${VAR}` the job does not set, a server that does not start, a timeout;
+exit 2) writes the error to the step summary and fails with an `::error`
+as well. The `report` output is set only when the report file was written. The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
 ### Plain shell
