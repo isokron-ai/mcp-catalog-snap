@@ -109,6 +109,8 @@ export interface SweepReport {
     /** Fields counted as model-visible; null when the adapter supplies the model-visible text (exec). */
     modelVisibleFields: string[] | null;
     budgetsApplyTo: 'modelVisible';
+    /** Why `totals.modelVisibleFieldSum` differs from `totals.modelVisible`. */
+    modelVisibleFieldSum: string;
     tokenizers: { id: string; label: string }[];
     budgetTokenizer: string;
   };
@@ -121,6 +123,8 @@ export interface SweepReport {
     modelVisible: Measure;
     /** Model-visible tokens per tool, in the budget tokenizer. */
     modelVisiblePerTool: Distribution;
+    /** The model-visible fields' per-field measures summed (each field tokenized on its own); differs from `modelVisible`, see measurement.modelVisibleFieldSum. */
+    modelVisibleFieldSum: Measure;
     fields: Partial<Record<ToolField, Measure>>;
     views: Record<string, Measure>;
     embeddedSchema: { tools: number; escaped: Measure; plain: Measure } | null;
@@ -145,6 +149,9 @@ export interface SweepReport {
 
 const SCOPE =
   'catalog-wide: every tool counted once, as if the full catalog were loaded. Not session exposure (what a client loaded) or task exposure (what an agent pulled).';
+
+const FIELD_SUM_NOTE =
+  'modelVisible tokenizes one object per tool (keys, quotes and JSON escaping of the description included, merges across field boundaries); modelVisibleFieldSum adds each field on its own (name and description as raw text, schemas as JSON). Budgets use modelVisible.';
 
 function hint(a: unknown, k: string): JsonValue {
   const v = isObj(a) ? a[k] : undefined;
@@ -312,6 +319,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       modelVisible: input.modelVisibleFromAdapter ? input.modelVisibleLabel : `${input.modelVisibleLabel}: ${(withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS).join(', ')}`,
       modelVisibleFields: input.modelVisibleFromAdapter ? null : [...(withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS)],
       budgetsApplyTo: 'modelVisible',
+      modelVisibleFieldSum: FIELD_SUM_NOTE,
       tokenizers: toks.map((t) => ({ id: t.id, label: t.label })),
       budgetTokenizer: budgetTok,
     },
@@ -326,6 +334,10 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       wire: wireTotal,
       modelVisible: visibleTotal,
       modelVisiblePerTool: distribution(tools.map((t) => t.modelVisible.tokens[budgetTok]!)),
+      modelVisibleFieldSum: (withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS).reduce(
+        (acc: Measure, f) => (fieldTotals[f] ? addMeasures(acc, fieldTotals[f]!) : acc),
+        emptyMeasure(toks),
+      ),
       fields: Object.fromEntries(TOOL_FIELDS.filter((f) => fieldTotals[f]).map((f) => [f, fieldTotals[f]!])),
       views: Object.fromEntries(Object.keys(viewTotals).sort().map((k) => [k, viewTotals[k]!])),
       embeddedSchema: embeddedCount > 0 ? { tools: embeddedCount, escaped: escTotal, plain: plainTotal } : null,

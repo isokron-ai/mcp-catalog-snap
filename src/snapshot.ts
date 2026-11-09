@@ -23,6 +23,7 @@
  */
 
 import { fingerprint, prettyCanonical, sortKeysDeep, type JsonValue } from './canonical.js';
+import { MAX_INPUT_BYTES } from './read-input.js';
 import { jsonSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
@@ -166,10 +167,28 @@ export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapsho
   };
 }
 
-/** The bytes written to disk: pretty-printed, key-sorted, trailing newline. */
-export function serializeSnapshot(snap: Snapshot): string {
-  // bidi / invisible characters written as \u escapes: same values, nothing hidden in a git diff
-  return jsonSafe(prettyCanonical(snap));
+/** Nesting depth from which a snapshot file writes subtrees as compact JSON on one line. */
+export const SNAPSHOT_PRETTY_DEPTH = 64;
+
+/**
+ * The bytes written to disk: pretty-printed, key-sorted, trailing newline;
+ * subtrees nested SNAPSHOT_PRETTY_DEPTH levels or deeper on one line (same
+ * values, same sha256). A text over `maxBytes` (default: the 64 MiB that
+ * check / diff / hash read) is refused here, before anything is written.
+ */
+export function serializeSnapshot(snap: Snapshot, opts: { maxBytes?: number } = {}): string {
+  const max = opts.maxBytes ?? MAX_INPUT_BYTES;
+  let text: string;
+  try {
+    // bidi / invisible characters written as \u escapes: same values, nothing hidden in a git diff
+    text = jsonSafe(prettyCanonical(snap, { compactFromDepth: SNAPSHOT_PRETTY_DEPTH }));
+  } catch (err) {
+    if (err instanceof RangeError) throw new Error(`snapshot would exceed the JavaScript string limit, over the ${max}-byte limit check/diff/hash read; not written`);
+    throw err;
+  }
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > max) throw new Error(`snapshot would be ${bytes} bytes, over the ${max}-byte limit check/diff/hash read; not written`);
+  return text;
 }
 
 /** Parse + validate a snapshot file's text. Throws on a malformed file. */

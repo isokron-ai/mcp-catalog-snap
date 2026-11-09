@@ -11,7 +11,7 @@
  *      was compared. Takes precedence over 2 and 1.
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { fingerprint } from './canonical.js';
@@ -28,6 +28,7 @@ import {
   snapshotSelfConsistent,
   type Snapshot,
 } from './snapshot.js';
+import { readInputText } from './read-input.js';
 import { jsonSafe, oneLine, scrubErrorText, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
@@ -108,7 +109,7 @@ function snapshotPath(dir: string, name: string): string {
 }
 
 function readSnapshotFile(path: string): Snapshot {
-  const text = readFileSync(path, 'utf8');
+  const text = readInputText(path, 'snapshot');
   return parseSnapshot(text, path);
 }
 

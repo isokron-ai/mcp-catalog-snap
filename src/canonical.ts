@@ -136,9 +136,13 @@ export function sortKeysDeep(value: unknown): JsonValue {
 /**
  * Pretty-printed, key-sorted JSON with a trailing newline (git-friendly).
  * Same bytes as `JSON.stringify(sortKeysDeep(v), null, 2)`, without its
- * recursion limit.
+ * recursion limit. With `compactFromDepth`, containers at that nesting depth
+ * or deeper are written as compact canonical JSON on one line: indentation
+ * costs 2 bytes per level per line, so a deep schema otherwise grows
+ * quadratically (6,000 levels: 222 KB of JSON, 360 MB pretty-printed).
  */
-export function prettyCanonical(value: unknown): string {
+export function prettyCanonical(value: unknown, opts: { compactFromDepth?: number } = {}): string {
+  const compactFrom = opts.compactFromDepth ?? Infinity;
   const sorted = sortKeysDeep(value);
   const out: string[] = [];
   const stack: [unknown, number][] = [[sorted, 0]];
@@ -150,6 +154,10 @@ export function prettyCanonical(value: unknown): string {
     }
     if (v === null || typeof v !== 'object') {
       out.push(primitive(v));
+      continue;
+    }
+    if (depth >= compactFrom) {
+      out.push(canonicalJson(v));
       continue;
     }
     const pad = '  '.repeat(depth + 1);

@@ -9,7 +9,6 @@
  * Precedence: 3 > 2 > 4.
  */
 
-import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { loadSweepInput, type LoadOptions } from './adapters/index.js';
@@ -17,6 +16,7 @@ import { ANTHROPIC_API_KEY_ENV, DEFAULT_ANTHROPIC_MODEL, anthropicToolCounts } f
 import type { Target } from './capture.js';
 import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED } from './commands.js';
 import { redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
+import { readInputText } from './read-input.js';
 import { renderSweepMarkdown } from './report-md.js';
 import { oneLine } from './safe-text.js';
 import { SnapshotIntegrityError } from './snapshot.js';
@@ -56,7 +56,7 @@ export interface SweepCommandOptions {
 
 function readCallResults(path: string): { tool: string; result: unknown }[] {
   const out: { tool: string; result: unknown }[] = [];
-  const lines = readFileSync(path, 'utf8').split('\n');
+  const lines = readInputText(path, '--call-results').split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line) continue;

@@ -19,7 +19,7 @@
  * Relative `snapshotDir` / `cwd` resolve against the config file's directory.
  */
 
-import { readFileSync } from 'node:fs';
+import { readInputText } from './read-input.js';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import type { Target } from './capture.js';
@@ -131,7 +131,7 @@ export function parseConfig(text: string, configPath: string, env: NodeJS.Proces
 export function loadConfig(configPath: string, env: NodeJS.ProcessEnv = process.env): CatalogConfig {
   let text: string;
   try {
-    text = readFileSync(configPath, 'utf8');
+    text = readInputText(configPath, 'config');
   } catch (err) {
     throw new Error(`cannot read config ${configPath}: ${(err as NodeJS.ErrnoException).message}`);
   }

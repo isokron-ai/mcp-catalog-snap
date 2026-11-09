@@ -6,6 +6,8 @@ uses semantic versioning once past 0.x.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-08
+
 ### Added
 
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
@@ -54,10 +56,32 @@ uses semantic versioning once past 0.x.
 
 ### Changed
 
-- `package.json` is `0.2.0-dev`, so the report `generator`, the snapshot
-  `capturedWith` and `--version` no longer claim 0.1.1 for unreleased
-  0.2 code; a test keeps the version ahead of the last released one while
-  `[Unreleased]` has entries.
+- A stray positional argument is an error; a named FIFO with no writer
+  fails after 5 s instead of hanging (opened non-blocking), and any pipe or
+  FIFO must deliver its input within 30 s (a trickling writer hung the
+  CLI). Snapshot files write values nested 64+ levels deep as compact JSON:
+  a 222 KB tools/list 6,000 levels deep used to produce a 360 MB file that
+  `check`/`diff`/`hash` then refused (64 MiB read cap); `snapshot` also
+  refuses, before writing, any file over that cap.
+- Sweep reports `totals.modelVisibleFieldSum` (each model-visible field
+  tokenized on its own) next to `totals.modelVisible` (one object per tool)
+  and explain the gap in the report and README (dogfood CS-5: 10,732 vs a
+  field-row sum of 11,239 looked like an error).
+- Options are strict (all commands). An unknown option is an error naming
+  the closest known one (`sweep --max-tool-token 4000`, a typo, used to run
+  with no budget and exit 0); a repeated single-value option is an error;
+  `--flag=value` booleans take only true/false/1/0; numbers must be plain
+  decimal safe integers (`''` used to mean 0, `0x10` 16); `--__proto__`
+  is an ordinary unknown option.
+- Input files are read with a cap (64 MiB; bearer files 64 KiB):
+  `--from /dev/zero` or `hash /dev/zero` aborted with std::bad_alloc (exit
+  134), now exit 2 with "is larger than … bytes". A UTF-8 BOM is ignored.
+  `/dev/stdin` also works when stdin is a socket.
+
+- The report `generator`, the snapshot `capturedWith` and `--version`
+  name the running version (main said 0.1.1 while shipping 0.2 code); a
+  test keeps `package.json` ahead of the last release while `[Unreleased]`
+  has entries.
 
 - Tokenizer backend is `gpt-tokenizer` (same cl100k/o200k counts, verified
   against Python tiktoken; linear on hostile input) instead of

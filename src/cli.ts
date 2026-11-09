@@ -11,6 +11,7 @@
 
 import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js';
 import { redact, redactingIO, targetSecrets } from './redact.js';
+import { validateFlags } from './cli-flags.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
 import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
 import { oneLine, terminalSafe } from './safe-text.js';
@@ -81,12 +82,13 @@ Exit codes: 0 ok / no drift · 1 drift · 2 error · 3 snapshot failed its sha25
             · 4 sweep budget exceeded
 `;
 
-function num(args: ParsedArgs, key: string, integer = true): number | undefined {
+/** A plain decimal, safe, non-negative integer: no '', hex, exponent, sign or fraction. */
+function num(args: ParsedArgs, key: string): number | undefined {
   const v = str(args.flags[key]);
   if (args.flags[key] === true) throw new Error(`--${key} needs a value`);
   if (v === undefined) return undefined;
   const n = Number(v);
-  if (!Number.isFinite(n) || n < 0 || (integer && !Number.isInteger(n))) throw new Error(`--${key} expects a non-negative ${integer ? 'integer' : 'number'}, got ${v}`);
+  if (!/^\d+$/.test(v) || !Number.isSafeInteger(n)) throw new Error(`--${key} expects a non-negative integer, got ${JSON.stringify(v)}`);
   return n;
 }
 
@@ -122,10 +124,11 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
 }
 
 function timeoutMs(args: ParsedArgs, key = 'timeout'): number | undefined {
+  if (args.flags[key] === true) throw new Error(`--${key} needs a value`);
   const t = str(args.flags[key]);
   if (t === undefined) return undefined;
   const n = Number(t);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`--${key} expects a positive number of ms, got ${t}`);
+  if (!/^\d+$/.test(t) || !Number.isSafeInteger(n) || n <= 0) throw new Error(`--${key} expects a positive number of ms (whole milliseconds), got ${JSON.stringify(t)}`);
   return n;
 }
 
@@ -162,6 +165,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
 
   let secrets: string[] = [];
   try {
+    validateFlags(args);
     const target = targetFromArgs(args);
     secrets = targetSecrets(target);
     io = redactingIO(rawIo, secrets);

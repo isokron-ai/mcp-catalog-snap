@@ -1,6 +1,7 @@
 /* global process, setTimeout */
 // Hostile stdio MCP server for tests: raw newline-delimited JSON-RPC (no SDK), so it can misbehave.
 // MODE=slowpages: every tools/list page takes 200 ms and points to another page.
+// MODE=deep: one tool whose schema nests DEPTH (default 50,000) levels.
 // MODE=big: tools/list answers with one ~1 MiB line (tests set a smaller message cap).
 // MODE=names: one tool; with ADD=1 also a tool whose name and property carry newlines, workflow commands and terminal escapes.
 // MODE=legacy: tool names with `##[cmd]` (runner legacy commands) and ZWSP/RLO/U+2028/NEL/NBSP.
@@ -43,6 +44,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (msg.method === 'tools/list' && MODE === 'slowpages') {
     const n = Number(msg.params?.cursor ?? 0) + 1;
     setTimeout(() => out({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: `t${n}`, inputSchema: { type: 'object' } }], nextCursor: String(n) } }), 200);
+  } else if (msg.method === 'tools/list' && MODE === 'deep') {
+    const n = Number(process.env.DEPTH ?? 50000);
+    const open = '{"type":"object","properties":{"a":';
+    process.stdout.write(`{"jsonrpc":"2.0","id":${JSON.stringify(msg.id)},"result":{"tools":[{"name":"deep","inputSchema":${open.repeat(n)}{"type":"string"}${'}}'.repeat(n)}}]}}\n`);
   } else if (msg.method === 'tools/list' && MODE === 'big') {
     out({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'big', description: 'x'.repeat(1 << 20), inputSchema: { type: 'object' } }] } });
   } else {
