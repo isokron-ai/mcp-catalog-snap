@@ -13,13 +13,13 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { basename } from 'node:path';
 
 import { canonicalJson } from './canonical.js';
 import { safeUrl } from './redact.js';
+import { GroupStdioTransport, type GroupStdioParams } from './stdio-transport.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
 
@@ -137,7 +137,7 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
     Object.assign(env, target.env ?? {});
-    const params: ConstructorParameters<typeof StdioClientTransport>[0] = {
+    const params: GroupStdioParams = {
       command: target.command,
       args: target.args,
       env,
@@ -145,7 +145,8 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
       maxBufferSize: maxMessage,
     };
     if (target.cwd) params.cwd = target.cwd;
-    return new StdioClientTransport(params);
+    // Own process group: closing (or a deadline) ends wrappers' grandchildren too, so nothing holds the pipes open.
+    return new GroupStdioTransport(params);
   }
   let url: URL;
   try {

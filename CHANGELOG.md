@@ -103,7 +103,12 @@ uses semantic versioning once past 0.x.
   version raw (`server version: a -> b`). Every stdout/stderr line now
   passes an output boundary (`terminalSafe`) that escapes terminal-active
   characters and neutralizes lines starting with `::` or a code fence,
-  whatever the call site.
+  whatever the call site, and breaks every `##[` (GitHub's legacy
+  `##[command]` form is honored anywhere in a line: a tool named
+  `n ##[stop-commands]tok` could silence the action's own `::error`).
+  Every JSON output and file (`--json`, `--no-write`, snapshots, reports,
+  `--save-raw`) writes C1, U+2028/9, bidi and invisible characters and
+  `##[` as `\u` escapes (same values when parsed).
 
 - Live capture is bounded (every command that talks to a server): a list
   stops after 1,000 pages or 64 MiB across pages (a server that returned a
@@ -113,8 +118,16 @@ uses semantic versioning once past 0.x.
   Content-Length or while streaming, with the download cancelled; an
   oversize stdio message now says so instead of "Connection closed"; a live
   exec sweep refuses a `tools` listing of more than 2,000 names.
-  `--timeout-total MS` (snapshot, check, hash, sweep) bounds a whole
-  capture; on expiry the child or connection is closed.
+  `--timeout-total MS` (snapshot, check, hash, sweep; action input
+  `timeout-total-ms`) bounds a whole capture. Stdio servers run in their
+  own process group and every close ends the group (SIGTERM, then SIGKILL
+  after 2 s; Windows: `taskkill /T /F`): before, only the direct child was
+  signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
+  left a grandchild holding the pipes and the CLI never exited. The
+  server's stderr is forwarded through an owned pipe instead of inherited.
+- Action: every exit path writes a step summary and every failure an
+  `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
+  had neither); the `report` output is set only when the file exists.
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

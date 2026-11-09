@@ -20,6 +20,7 @@
  */
 
 import { canonicalJson } from '../canonical.js';
+import { jsonSafe } from '../safe-text.js';
 import { listCatalog, openSession, withDeadline, type CaptureOptions, type Session, type Target } from '../capture.js';
 import type { Finding } from '../findings.js';
 import { allSubtrees, isObj } from '../schema-walk.js';
@@ -348,5 +349,5 @@ export async function sweepInputFromExecSession(
 
 /** JSONL for `--save-raw`, re-readable with `--from` (deterministic: sorted, canonical keys). */
 export function serializeExecRecords(records: readonly ExecRecord[]): string {
-  return records.map((r) => canonicalJson(r)).join('\n') + (records.length > 0 ? '\n' : '');
+  return records.map((r) => jsonSafe(canonicalJson(r))).join('\n') + (records.length > 0 ? '\n' : '');
 }

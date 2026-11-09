@@ -119,6 +119,66 @@ describe('output boundary', () => {
   });
 });
 
+describe('runner legacy commands (`##[cmd]` anywhere in a line) and machine/file outputs', () => {
+  const RAW_VIEW = new RegExp(`[${String.fromCharCode(0x200b, 0x202e, 0x2028, 0x85, 0x2066)}]`);
+  const noLegacy = (text: string): void => {
+    expect(text).not.toContain('##[');
+    assertTerminalSafe(text);
+  };
+
+  it('terminalSafe() breaks every ##[ and a :: after leading invisible characters', () => {
+    expect(terminalSafe('a ##[stop-commands]t ##[error]x ###[')).toBe('a #\\u0023[stop-commands]t #\\u0023[error]x ##\\u0023[');
+    expect(terminalSafe(`${String.fromCharCode(0x200b)}::error::x`)).toBe(`${String.fromCharCode(0x200b)}\\::error::x`);
+    expect(terminalSafe(`${String.fromCharCode(0xa0)}::error::x`)).toBe(`${String.fromCharCode(0xa0)}\\::error::x`);
+    expect(JSON.parse(terminalSafe(JSON.stringify({ a: 'n ##[x]' })))).toEqual({ a: 'n ##[x]' });
+  });
+
+  it('check, diff, sweep (md and --json), hash and errors never print a raw ##[', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-legacy-'));
+    const srv = ['--', process.execPath, HOSTILE];
+    const snap = cli(['snapshot', '--name', 'l', ...srv], dir, { MODE: 'legacy' });
+    expect(snap.code).toBe(0);
+    noLegacy(snap.stdout);
+    const check = cli(['check', '--name', 'l', ...srv], dir, { MODE: 'legacy', ADD: '1' });
+    expect(check.code).toBe(1);
+    noLegacy(check.stdout + check.stderr);
+    expect(check.stdout).toContain('added #\\u0023[warning]W');
+    const a = join(dir, '.mcp-catalog', 'l.json');
+    writeFileSync(join(dir, 'b.json'), cli(['snapshot', '--no-write', ...srv], dir, { MODE: 'legacy', ADD: '1' }).stdout);
+    const diff = cli(['diff', a, join(dir, 'b.json')], dir);
+    expect(diff.code).toBe(1);
+    noLegacy(diff.stdout);
+    noLegacy(cli(['diff', '--json', a, join(dir, 'b.json')], dir).stdout);
+    noLegacy(cli(['sweep', ...srv], dir, { MODE: 'legacy' }).stdout);
+    noLegacy(cli(['sweep', '--json', ...srv], dir, { MODE: 'legacy' }).stdout);
+    writeFileSync(join(dir, '.mcp-catalog.json'), JSON.stringify({ servers: ['h ##[stop-commands]x', 'h2'].map((name) => ({ name, command: [process.execPath, HOSTILE], env: { MODE: 'legacy' } })) }));
+    noLegacy(cli(['hash'], dir).stdout);
+    const err = cli(['sweep', ...srv], dir, { MODE: 'errmsg' });
+    expect(err.code).toBe(2);
+    noLegacy(err.stderr);
+    expect(err.stderr).toContain('#\\u0023[add-mask]DRIFT');
+  });
+
+  it('JSON outputs and files carry no raw ZWSP / RLO / U+2028 / NEL, and still parse to the same values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-legacy-'));
+    const srv = ['--', process.execPath, HOSTILE];
+    expect(cli(['snapshot', '--name', 'l', ...srv], dir, { MODE: 'legacy' }).code).toBe(0);
+    const file = readFileSync(join(dir, '.mcp-catalog', 'l.json'), 'utf8');
+    const noWrite = cli(['snapshot', '--no-write', ...srv], dir, { MODE: 'legacy' }).stdout;
+    const sweepJson = cli(['sweep', '--json', '--report', 'r.json', ...srv], dir, { MODE: 'legacy' }).stdout;
+    const report = readFileSync(join(dir, 'r.json'), 'utf8');
+    const checkRep = (cli(['check', '--name', 'l', '--json', '--report', 'c.json', ...srv], dir, { MODE: 'legacy', ADD: '1' }), readFileSync(join(dir, 'c.json'), 'utf8'));
+    for (const [what, text] of [['snapshot file', file], ['--no-write', noWrite], ['sweep --json', sweepJson], ['sweep --report', report], ['check --report', checkRep]] as const) {
+      expect(text, what).not.toMatch(RAW_VIEW);
+    }
+    const names = (JSON.parse(file) as { catalog: { tools: { name: string }[] } }).catalog.tools.map((t) => t.name);
+    expect(names).toContain(`rlo${String.fromCharCode(0x202e)}evil`);
+    expect(names).toContain(`ls${String.fromCharCode(0x2028)}x`);
+    expect(sweepJson).toBe(report);
+    expect(cli(['check', '--name', 'l', ...srv], dir, { MODE: 'legacy' }).code).toBe(0);
+  });
+});
+
 describe('CLI end to end (hostile stdio server)', () => {
   it('check: a hostile server name/version cannot inject either (version line, header)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcs-term-'));
