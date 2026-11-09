@@ -10,6 +10,21 @@ uses semantic versioning once past 0.x.
 
 ### Added
 
+- **Annotation-aware drift** (dogfood CS-1/2). `check` and `diff` classify
+  added tools from their annotations (`read-only` / `write` /
+  `destructive`; absent hints default to not read-only and destructive, per
+  the spec), mark them in the listing, lead with `SAFETY:` lines, and treat
+  added non-read-only tools and tools whose annotations got less safe as
+  drift reasons of their own. `--allow-additions` no longer waives an added
+  tool that can write; that needs `--allow-write-additions` (action input
+  `allow-write-additions`). JSON diffs carry `safety`; the Action adds a
+  heading and an `::error` for each. Repro: a read-only baseline checked
+  against a server whose read-only mode failed open (github-mcp-server
+  issue 3747) printed "+19 added" with no marker and passed with
+  `--allow-additions`. `snapshot` and `check` warn on stderr about a tool
+  that declares both `readOnlyHint: true` and `destructiveHint: true`
+  (classified read-only, per the spec, so `--allow-additions` waives it).
+
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
   separate measures per tool and in totals: `wire` (canonical JSON of the
   whole `tools/list` entry, icons and `_meta` included) and `modelVisible`
@@ -61,8 +76,12 @@ uses semantic versioning once past 0.x.
   FIFO must deliver its input within 30 s (a trickling writer hung the
   CLI). Snapshot files write values nested 64+ levels deep as compact JSON:
   a 222 KB tools/list 6,000 levels deep used to produce a 360 MB file that
-  `check`/`diff`/`hash` then refused (64 MiB read cap); `snapshot` also
-  refuses, before writing, any file over that cap.
+  `check`/`diff`/`hash` then refused (64 MiB read cap). Compaction is also
+  triggered by size: a file that would still be over the cap writes each
+  catalog entry's field values compact (entries keep their own lines), then
+  falls back to fully compact JSON (a 5.5 MB schema 28 levels deep with
+  200k leaves pretty-printed to ~79 MB and was refused); `snapshot`
+  refuses, before writing, only a file over the cap even as compact JSON.
 - Sweep reports `totals.modelVisibleFieldSum` (each model-visible field
   tokenized on its own) next to `totals.modelVisible` (one object per tool)
   and explain the gap in the report and README (dogfood CS-5: 10,732 vs a
@@ -115,9 +134,25 @@ uses semantic versioning once past 0.x.
   text is `***` (scheme-less `/mcp?pwd=…` too). A mistyped
   `--header "Authorization=Bearer …"` or `--env "TOKEN:…"` no longer echoes
   the value. `hash FILE --url U` is refused instead of ignoring `--url`.
-  Error labels show the stdio command and its arguments with credentials
-  masked (`srv --profile ro --token ***`) so the failing server is
-  identifiable (dogfood CS-11; the earlier fix showed `srv …`).
+  Stdio servers launched from a command line are labelled by the command
+  basename plus a short stable hash of the command line (`node#1a2b3c4d`;
+  `--label TEXT` on `snapshot` / `check` names one explicitly), never by
+  their arguments: the release candidate showed the arguments with a list
+  of credential patterns masked, and `check --report r.json -- node srv
+  --header "Authorization: Bearer …" postgresql://u:PW@h/db` still wrote
+  both secrets to stderr and to the report's `servers[].server`, as did
+  `mongodb+srv://` / `redis://` userinfo, `-e TOKEN=V` / `KEY=V` with a
+  value lacking a digit or containing punctuation, `--dsn=postgres://…` and
+  `--pat` / `--bearer` / `-t` / `-k` values. The hash is taken over the
+  command line with credentials masked. As defence in depth, the masking
+  (and the set of argument values scrubbed from all output) now covers URL
+  userinfo for any scheme, values of any flag whose name contains token,
+  secret, key, pass, pwd, auth, bearer, cred, cookie or session or has the
+  word pat, dsn, pw, sig or jwt, `-H` / `--header` values, `NAME=VALUE` with
+  a credential NAME, credential pairs in query and connection strings, and
+  `Authorization:` / `Bearer` values anywhere (`-t` / `-k` / `-p` values
+  are masked for display only). Configured servers were never affected:
+  they are labelled by their `name`.
 
 - Server text printed to a terminal or CI log is neutralized. `check`
   printed tool names and property paths raw: a name containing a newline
@@ -155,9 +190,19 @@ uses semantic versioning once past 0.x.
   signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
   left a grandchild holding the pipes and the CLI never exited. The
   server's stderr is forwarded through an owned pipe instead of inherited.
+  Processes that leave the group (`setsid` / `setpgid`, Node `detached:
+  true` children such as Puppeteer / Playwright browsers, Docker
+  containers, which outlive `docker run`) are not reaped; the README's
+  Limitations say how to run such servers (`docker run -i --rm --init`).
 - Action: every exit path writes a step summary and every failure an
   `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
-  had neither); the `report` output is set only when the file exists.
+  had neither); the `report` output is set only when the file exists. The
+  server's stderr, which the CLI forwards as written, is echoed to the log
+  between `::stop-commands::<random token>` and `::<token>::` (a server
+  printing `::error::…`, `::add-mask::…` or `##[…]` had them run by the
+  runner), and the step summary fences it, and the drift output, with a
+  fence longer than any backtick run in the text (a ```` ``` ```` line in
+  server stderr closed the summary's code block).
 
 - Schemas are untrusted: `pattern` is never executed (a default whose check
   needs one is reported as `default-unchecked`), default validation has a

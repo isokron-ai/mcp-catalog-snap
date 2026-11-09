@@ -53,6 +53,22 @@ export interface RenderOptions {
   afterLabel?: string;
 }
 
+/** The prominent lines: added tools that can write, and tools whose annotations got less safe. */
+export function safetyLines(diff: CatalogDiff): string[] {
+  const out: string[] = [];
+  const s = diff.safety;
+  if (!s) return out;
+  const risky = s.added.filter((x) => x.safety !== 'read-only');
+  if (risky.length > 0) {
+    const destructive = risky.filter((x) => x.safety === 'destructive').length;
+    out.push(`SAFETY: ${risky.length} added tool(s) are not read-only (${destructive} destructive): ${risky.map((x) => visible(x.key)).join(', ')}`);
+  }
+  if (s.lessSafe.length > 0) {
+    out.push(`SAFETY: ${s.lessSafe.length} tool(s) became less safe: ${s.lessSafe.map((x) => `${visible(x.key)} (${x.before} -> ${x.after})`).join(', ')}`);
+  }
+  return out;
+}
+
 export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOptions = {}): string {
   const beforeLabel = opts.beforeLabel ?? 'snapshot';
   const afterLabel = opts.afterLabel ?? 'live';
@@ -64,6 +80,7 @@ export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOpti
     lines.push('catalog: identical (byte-for-byte canonical match)');
     return lines.join('\n');
   }
+  lines.push(...safetyLines(diff));
   for (const s of diff.sections) {
     const total = s.added.length + s.removed.length + s.changed.length;
     if (total === 0) continue;
@@ -72,7 +89,10 @@ export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOpti
       `${LABEL[s.section]}: ${diff.counts.before[s.section]} -> ${diff.counts.after[s.section]} ` +
         `(+${s.added.length} added, -${s.removed.length} removed, ~${s.changed.length} changed)`,
     );
-    for (const k of s.added) lines.push(`  + ${visible(k)}`);
+    for (const k of s.added) {
+      const safety = s.section === 'tools' ? diff.safety?.added.find((x) => x.key === k)?.safety : undefined;
+      lines.push(`  + ${visible(k)}${safety ? `  [${safety}]` : ''}`);
+    }
     for (const k of s.removed) lines.push(`  - ${visible(k)}`);
     for (const c of s.changed) {
       lines.push(`  ~ ${visible(c.key)}${c.descriptionOnly ? '  [description-only]' : ''}`);
@@ -122,6 +142,6 @@ export interface ServerResult {
 export interface CheckReport {
   tool: string;
   ok: boolean;
-  policy: { ignoreDescriptions: boolean; allowAdditions: boolean };
+  policy: { ignoreDescriptions: boolean; allowAdditions: boolean; allowWriteAdditions: boolean };
   servers: ServerResult[];
 }

@@ -7,7 +7,7 @@
  *   "server": { "name": "kronicle-lite", "version": "0.2.0" },
  *   "protocolVersion": "2025-11-25",
  *   "capturedAt": "2026-10-31T23:00:00.000Z",
- *   "capturedWith": "mcp-catalog-snap/0.1.0",
+ *   "capturedWith": "mcp-catalog-snap/0.2.0",
  *   "sha256": "<sha256 of canonicalJson(catalog)>",
  *   "catalog": {
  *     "tools": [ ...sorted by name, every field tools/list returned... ],
@@ -171,24 +171,42 @@ export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapsho
 export const SNAPSHOT_PRETTY_DEPTH = 64;
 
 /**
+ * Compaction tried in order until the file fits the read cap: subtrees
+ * nested SNAPSHOT_PRETTY_DEPTH+ levels compact; then every catalog entry's
+ * field values compact (depth 4: snapshot > catalog > section > entry >
+ * field), so each tool still gets its own lines in a git diff; then the
+ * whole file as compact canonical JSON.
+ */
+export const SNAPSHOT_COMPACT_LEVELS: readonly number[] = [SNAPSHOT_PRETTY_DEPTH, 4, 0];
+
+/**
  * The bytes written to disk: pretty-printed, key-sorted, trailing newline;
- * subtrees nested SNAPSHOT_PRETTY_DEPTH levels or deeper on one line (same
- * values, same sha256). A text over `maxBytes` (default: the 64 MiB that
- * check / diff / hash read) is refused here, before anything is written.
+ * subtrees nested SNAPSHOT_PRETTY_DEPTH levels or deeper on one line. When
+ * that would exceed `maxBytes` (default: the 64 MiB that check / diff /
+ * hash read) - a wide schema a few dozen levels deep pretty-prints to many
+ * times its compact size - the next level of SNAPSHOT_COMPACT_LEVELS is
+ * used, down to fully compact JSON. Every form has the same values and the
+ * same sha256. A file over `maxBytes` even fully compact is refused here,
+ * before anything is written.
  */
 export function serializeSnapshot(snap: Snapshot, opts: { maxBytes?: number } = {}): string {
   const max = opts.maxBytes ?? MAX_INPUT_BYTES;
-  let text: string;
-  try {
-    // bidi / invisible characters written as \u escapes: same values, nothing hidden in a git diff
-    text = jsonSafe(prettyCanonical(snap, { compactFromDepth: SNAPSHOT_PRETTY_DEPTH }));
-  } catch (err) {
-    if (err instanceof RangeError) throw new Error(`snapshot would exceed the JavaScript string limit, over the ${max}-byte limit check/diff/hash read; not written`);
-    throw err;
+  let bytes = 0;
+  for (const depth of SNAPSHOT_COMPACT_LEVELS) {
+    let text: string;
+    try {
+      // bidi / invisible characters written as \u escapes: same values, nothing hidden in a git diff
+      text = jsonSafe(prettyCanonical(snap, { compactFromDepth: depth }));
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      bytes = Infinity;
+      continue;
+    }
+    bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes <= max) return text;
   }
-  const bytes = Buffer.byteLength(text, 'utf8');
-  if (bytes > max) throw new Error(`snapshot would be ${bytes} bytes, over the ${max}-byte limit check/diff/hash read; not written`);
-  return text;
+  if (bytes === Infinity) throw new Error(`snapshot would exceed the JavaScript string limit, over the ${max}-byte limit check/diff/hash read; not written`);
+  throw new Error(`snapshot would be ${bytes} bytes even as compact JSON, over the ${max}-byte limit check/diff/hash read; not written`);
 }
 
 /** Parse + validate a snapshot file's text. Throws on a malformed file. */

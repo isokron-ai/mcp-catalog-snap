@@ -79,8 +79,8 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 
 | command | does |
 | --- | --- |
-| `snapshot [-- cmd …] [--url U]` | capture → `.mcp-catalog/<server>.json` (`--name`, `--dir`, `--no-write`) |
-| `check [--server N] [--ignore-descriptions] [--allow-additions] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
+| `snapshot [-- cmd …] [--url U]` | capture → `.mcp-catalog/<server>.json` (`--name`, `--label`, `--dir`, `--no-write`) |
+| `check [--server N] [--ignore-descriptions] [--allow-additions [--allow-write-additions]] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
 | `diff A.json B.json [--json]` | diff two snapshot files |
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
 | `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
@@ -93,9 +93,10 @@ two, the others none), and input files (`--from`, snapshots, config,
 `--call-results`, `--bearer-file`) are read up to 64 MiB (64 KiB for a
 bearer file). Pipes such as `--from <(…)` or `/dev/stdin` work but must
 deliver their input within 30 s; a named FIFO gets 5 s for a writer and
-then fails instead of hanging; a UTF-8 BOM is ignored. `snapshot` refuses,
-before writing, a file larger than the 64 MiB that `check`, `diff` and
-`hash` read.
+then fails instead of hanging; a UTF-8 BOM is ignored. `snapshot` writes a
+file that would be larger than the 64 MiB that `check`, `diff` and `hash`
+read in a more compact form (see [Snapshot format](#snapshot-format)), and
+refuses, before writing, one that is over it even as compact JSON.
 
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
 for `Authorization: Bearer …` (stdio servers: `--env`; config files:
@@ -114,6 +115,22 @@ Policy flags:
   lists *no* entries in a section (say, `"tools": []`) and the live server
   lists some, that section was never checked, so its additions still count
   as drift. Re-snapshot if the server really gained its first prompt.
+  It waives only added tools with `readOnlyHint: true`: an added tool that
+  can write still drifts unless `--allow-write-additions` is given too.
+- **Tool safety.** Every added tool is classified from its annotations
+  (MCP defaults: not read-only unless `readOnlyHint: true`; a non-read-only
+  tool is destructive unless `destructiveHint: false`) and marked
+  `[read-only]`, `[write]` or `[destructive]`. Added tools that can write,
+  and tools whose annotations moved toward write/destructive, are listed
+  first as `SAFETY:` lines, are drift reasons of their own, sit in the
+  JSON diff under `safety`, and get their own heading and `::error` in the
+  Action. This is the shape of a read-only deployment failing open (e.g.
+  github-mcp-server issue 3747, `GITHUB_READ_ONLY=yes` ignored): the
+  snapshot holds the read tools and the live server lists write tools too.
+  A tool that declares both `readOnlyHint: true` and `destructiveHint:
+  true` is classified read-only (the spec only reads `destructiveHint` when
+  `readOnlyHint` is false); `snapshot` and `check` print a `warning:` line
+  on stderr for it, since one of the two hints is wrong.
 
 Every command that reads a snapshot file (`check`, `diff`, `hash FILE`)
 first recomputes the sha256 of its `catalog` and compares it with the
@@ -264,9 +281,13 @@ one line of at most 1,000 characters.
 
 **Credentials.** Bearer tokens and other credential headers, credential-named
 URL query values (`?api_key=`, `?token=`, `?sig=`, `X-Amz-Signature`,
-`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credential-named stdio
-arguments (`--token X`, `--api-key=X`) and credential-looking `--env` values
-(all of 8+ characters) are
+`X-Goog-Credential`, `?code=`, `?jwt=`, `?pat=`, …), credentials in stdio
+arguments (values of credential-named flags such as `--token X`,
+`--api-key=X`, `--pat X`, `--dsn=…`; credential `-H`/`--header` values;
+`NAME=VALUE` where NAME names a credential; URL passwords for any scheme,
+`postgresql://`, `mongodb+srv://`, `redis://` included; credential pairs in
+query and connection strings; `Bearer` values) and credential-looking
+`--env` values (all of 8+ characters) are
 scrubbed from the report and diff data before anything is formatted, and
 again from everything any command prints or writes, in raw, markdown,
 JSON-pointer, JSON, percent-encoded and base64 forms, including text the
@@ -275,10 +296,15 @@ refused rather than written to a snapshot or raw dump. Credential headers
 shorter than 8 characters are refused, and so is a `--url` with
 `user:password@`. Report sources and every message label a target by URL
 origin and path (credential-looking path segments masked, any query shown
-only as `[query redacted]`) or by the stdio command's basename and arguments
-(`--token X`, `--api-key=X` and credential-looking values shown as `***`,
-URLs as origin + path; the sweep report's `source` keeps the basename
-only). URLs inside server and SDK error text are reduced the same way, and
+only as `[query redacted]`) or, for a stdio server, by the command's
+basename and a short hash of its command line, `node#1a2b3c4d`, never by
+its arguments: credential syntax on a command line is open-ended, so no
+masking rule can be trusted to catch it all. The hash is stable across
+runs, distinguishes servers whose command lines differ in anything but a
+recognized credential, and is computed over the masked command line, so it
+is no guessing oracle for those. Name an ad-hoc server yourself with
+`--label TEXT` (`snapshot`, `check`); configured servers are labelled by
+their `name`. The sweep report's `source` keeps the basename only. URLs inside server and SDK error text are reduced the same way, and
 every `?k=v` value in error text is shown as `***` whatever its name, so a
 4xx body that repeats the request target (`/mcp?pwd=…`) cannot echo it.
 Argument errors (`--header`, `--env` without a separator) never show the
@@ -328,7 +354,7 @@ A schema change reads the same way, with the path that moved:
 ```json
 {
   "capturedAt": "2026-10-31T23:01:48.036Z",
-  "capturedWith": "mcp-catalog-snap/0.1.0",
+  "capturedWith": "mcp-catalog-snap/0.2.0",
   "catalog": {
     "prompts": [],
     "resourceTemplates": [ { "uriTemplate": "kronicle://docs/{slug}", "...": "..." } ],
@@ -345,9 +371,14 @@ A schema change reads the same way, with the path that moved:
   around `catalog`); the file is the canonical form pretty-printed so git
   diffs stay readable. Values nested 64 levels or deeper are written as
   compact JSON on one line (indentation would otherwise grow quadratically:
-  a 6,000-level schema of 222 KB pretty-printed to 360 MB). Bidi, invisible
-  and C1 characters inside strings are written as `\u` escapes. Neither
-  changes the values or `sha256`.
+  a 6,000-level schema of 222 KB pretty-printed to 360 MB). If the file
+  would still be over the 64 MiB that `check`, `diff` and `hash` read (a
+  wide schema: 5.5 MB of JSON 28 levels deep with 200k leaves
+  pretty-prints to ~79 MB), each tool, prompt and template keeps its own
+  lines but writes its field values compact, and failing that the whole
+  file is compact JSON. Bidi, invisible and C1 characters inside strings
+  are written as `\u` escapes. None of this changes the values or
+  `sha256`.
 - `sha256` covers the compact canonical bytes of `catalog` only. A server
   version bump or a new capture time does not change it. Think of it as the
   **cache-prefix fingerprint**: same hash, same tool bytes.
@@ -385,11 +416,22 @@ exit 2) writes the error to the step summary and fails with an `::error`
 as well. The `report` output is set only when the report file was written. The action builds the pinned copy of the CLI
 that ships with the tag (no registry lookup at run time).
 
+A stdio server's stderr is forwarded as the server wrote it, so the action
+treats it as untrusted: it is echoed to the job log between
+`::stop-commands::<random token>` and `::<token>::`, so `::error::`,
+`::add-mask::` or `##[…]` lines in it are shown rather than run, and the
+step summary puts it (and the drift output) in a code block whose fence is
+longer than any backtick run in the text, so it cannot close the block.
+
 ### Plain shell
 
 ```yaml
       - run: npx -y mcp-catalog-snap@0.2.0 check
 ```
+
+In a plain `run:` step the server's stderr goes to the log unfiltered (the
+CLI's own output is neutralized, the server's is not); use the action, or
+send it elsewhere with `2> server.err`, if the server is not yours.
 
 When a change is intended, re-run `snapshot` (or `check --update`) and
 commit the new `.mcp-catalog/` file in the same PR; the reviewer sees the
@@ -450,6 +492,17 @@ servers, checked in this repo's own CI:
   stderr is forwarded through a pipe the CLI closes, so even a process
   that escaped the group (`setsid`) cannot keep the CLI from exiting. On
   Windows the tree is ended with `taskkill /T /F` (not covered by CI).
+
+  Processes that leave the process group are **not reaped**: anything the
+  server starts with `setsid` / `setpgid`, Node `spawn(..., { detached:
+  true })` children (Puppeteer and Playwright launch their browsers this
+  way, so a browser-automation server can leave Chrome running), and
+  Docker containers. For Docker, `docker run` is only a client: ending it
+  does not stop the container, which keeps running under the daemon. Run
+  such servers as `docker run -i --rm --init …` (`--rm` removes the
+  container when it exits, `--init` forwards signals to the server inside
+  it and reaps its children), and in CI clean up leftovers yourself
+  (`docker ps`, `pkill -f chrome`) or give the job a timeout.
 
   | cap | value |
   | --- | --- |

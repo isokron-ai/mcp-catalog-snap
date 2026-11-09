@@ -30,6 +30,8 @@ export const DEFAULT_SNAPSHOT_DIR = '.mcp-catalog';
 export interface ServerSpec {
   name: string;
   target: Target;
+  /** Display label for messages and reports (ad-hoc `--label`); default: `name`, else `describeTarget`. */
+  label?: string;
 }
 
 export interface CatalogConfig {

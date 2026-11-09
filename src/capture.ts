@@ -15,10 +15,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { canonicalJson } from './canonical.js';
-import { maskedArgs, safeUrl } from './redact.js';
+import { looksSecret, maskedArgs, safeUrl } from './redact.js';
 import { GroupStdioTransport, type GroupStdioParams } from './stdio-transport.js';
 import type { RawCapture } from './snapshot.js';
 import { VERSION } from './version.js';
@@ -60,13 +61,22 @@ export interface CaptureOptions {
 }
 
 /**
- * A label for messages and reports that carries no credentials: the stdio
- * command's basename and its arguments with credentials masked
- * (`maskedArgs`), so a user can tell which server failed, or the URL's
- * origin and path (no query, no user:password@).
+ * A label for messages and reports that carries no credentials. A stdio
+ * target is labelled by its command's basename and a short stable hash of
+ * its command line (`node#1a2b3c4d`), never by its arguments: argument
+ * syntax for credentials is open-ended (`--header "Authorization: …"`,
+ * `postgresql://u:pw@h`, `-e TOKEN=…`, `-t …`), so no masking rule can be
+ * trusted to catch them all. The hash is taken over the command line with
+ * credentials masked (`maskedArgs`), so it is not a guessing oracle for a
+ * recognized credential either. Pass `--label` to name an ad-hoc server.
+ * An http target shows the URL's origin and path (no query, no
+ * user:password@, credential-looking segments masked).
  */
 export function describeTarget(t: Target): string {
-  return t.kind === 'stdio' ? [basename(t.command), ...maskedArgs(t.args)].join(' ') : safeUrl(t.url);
+  if (t.kind === 'http') return safeUrl(t.url);
+  const base = basename(t.command);
+  const hash = createHash('sha256').update(JSON.stringify([t.command, ...maskedArgs(t.args)])).digest('hex').slice(0, 8);
+  return `${base === '' || looksSecret(base) ? 'server' : base}#${hash}`;
 }
 
 /**

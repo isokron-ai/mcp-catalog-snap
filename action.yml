@@ -22,7 +22,11 @@ inputs:
     required: false
     default: 'false'
   allow-additions:
-    description: 'Do not treat added tools/prompts/templates as drift (true/false).'
+    description: 'Do not treat added read-only tools / prompts / templates as drift (true/false). Added tools that are not read-only still fail unless allow-write-additions is also true.'
+    required: false
+    default: 'false'
+  allow-write-additions:
+    description: 'With allow-additions, also waive added tools that are not read-only (write/destructive) (true/false).'
     required: false
     default: 'false'
   server:
@@ -74,6 +78,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.servers-config }}
         INPUT_IGNORE_DESCRIPTIONS: ${{ inputs.ignore-descriptions }}
         INPUT_ALLOW_ADDITIONS: ${{ inputs.allow-additions }}
+        INPUT_ALLOW_WRITE_ADDITIONS: ${{ inputs.allow-write-additions }}
         INPUT_SERVER: ${{ inputs.server }}
         INPUT_TIMEOUT: ${{ inputs.timeout-ms }}
         INPUT_TIMEOUT_TOTAL: ${{ inputs.timeout-total-ms }}
@@ -82,6 +87,7 @@ runs:
         args=(check --config "$INPUT_CONFIG" --timeout "$INPUT_TIMEOUT")
         [ "$INPUT_IGNORE_DESCRIPTIONS" = "true" ] && args+=(--ignore-descriptions)
         [ "$INPUT_ALLOW_ADDITIONS" = "true" ] && args+=(--allow-additions)
+        [ "$INPUT_ALLOW_WRITE_ADDITIONS" = "true" ] && args+=(--allow-write-additions)
         [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
         [ -n "$INPUT_TIMEOUT_TOTAL" ] && args+=(--timeout-total "$INPUT_TIMEOUT_TOTAL")
 
@@ -89,27 +95,80 @@ runs:
         rm -f "$report"
         node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" --report "$report" 2>mcp-catalog-check.err | tee mcp-catalog-check.txt
         code=${PIPESTATUS[0]}
-        cat mcp-catalog-check.err >&2
+
+        # The server's stderr reaches mcp-catalog-check.err raw (the CLI forwards it), so it is untrusted:
+        # echo it with workflow-command processing stopped under a token it cannot know, so `::error::`,
+        # `::add-mask::` or `##[...]` lines in it are shown, not run. Same stream as the action's own
+        # `::error` lines below, so the resume line is always processed before them.
+        ensure_nl() { [ -s "$1" ] && [ -n "$(tail -c1 "$1")" ] && echo; return 0; }
+        if [ -s mcp-catalog-check.err ]; then
+          stop_token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          cat mcp-catalog-check.err
+          ensure_nl mcp-catalog-check.err
+          echo "::$stop_token::"
+        fi
+        # A code block for the step summary whose fence is longer than any backtick run in the file,
+        # so a fence in server text cannot close it.
+        fenced() {
+          local n fence
+          n=$(LC_ALL=C grep -oE '`+' "$1" 2>/dev/null | LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+          [ "$n" -lt 3 ] && n=2
+          fence=$(printf '%*s' "$((n + 1))" '' | tr ' ' '`')
+          echo "$fence"
+          cat "$1"
+          ensure_nl "$1"
+          echo "$fence"
+        }
         # only point at a report that was actually written
         [ -f "$report" ] && echo "report=$report" >> "$GITHUB_OUTPUT"
         if [ "$code" -eq 1 ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
 
+        # tool safety from the report: added tools that are not read-only, tools whose annotations got less safe
+        risky=0; destructive=0; less=0
+        if [ -f "$report" ]; then
+          read -r risky destructive less < <(node -e '
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            let a = 0, d = 0, l = 0;
+            for (const s of r.servers || []) {
+              const x = s.diff && s.diff.safety;
+              if (!x) continue;
+              for (const t of x.added) if (t.safety !== "read-only") { a++; if (t.safety === "destructive") d++; }
+              l += x.lessSafe.length;
+            }
+            process.stdout.write(`${a} ${d} ${l}\n`);' "$report" 2>/dev/null || echo "0 0 0")
+        fi
+        safety_summary() {
+          if [ "$risky" -gt 0 ]; then
+            echo "### Not read-only: $risky added tool(s) can write ($destructive destructive)"
+            echo
+            echo 'Each is marked `[write]` or `[destructive]` below. A read-only deployment that lists them has failed open.'
+            echo
+          fi
+          if [ "$less" -gt 0 ]; then
+            echo "### Less safe: $less tool(s) changed annotations toward write/destructive"
+            echo
+          fi
+        }
+
         # every exit path writes a summary; every failure also emits ::error
         case "$code" in
           0)
-            echo "## MCP catalog: no drift" >> "$GITHUB_STEP_SUMMARY"
+            { echo "## MCP catalog: no drift"; echo; safety_summary; } >> "$GITHUB_STEP_SUMMARY"
+            [ "$risky" -gt 0 ] && echo "::warning title=MCP catalog: tools that can write were added::$risky added tool(s) are not read-only ($destructive destructive), waived by allow-write-additions"
             ;;
           1)
             {
               echo "## MCP catalog drift detected"
               echo
-              echo '```'
-              cat mcp-catalog-check.txt
-              echo '```'
+              safety_summary
+              fenced mcp-catalog-check.txt
               echo
               echo 'Re-snapshot with `npx mcp-catalog-snap snapshot` and commit `.mcp-catalog/` if the change is intended.'
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error title=MCP catalog drift::tool catalog differs from .mcp-catalog snapshot (prompt-cache prefix changed)"
+            [ "$risky" -gt 0 ] && echo "::error title=MCP catalog: tools that can write were added::$risky added tool(s) are not read-only ($destructive destructive); see the step summary"
+            [ "$less" -gt 0 ] && echo "::error title=MCP catalog: tool annotations became less safe::$less tool(s); see the step summary"
             ;;
           3)
             {
@@ -124,9 +183,7 @@ runs:
             {
               echo "## MCP catalog check could not run (exit $code)"
               echo
-              echo '```'
-              cat mcp-catalog-check.err
-              echo '```'
+              fenced mcp-catalog-check.err
               echo
               echo 'Usual causes: a `${VAR}` in the config that is not set in the job, a server that failed to start, or a timeout.'
             } >> "$GITHUB_STEP_SUMMARY"

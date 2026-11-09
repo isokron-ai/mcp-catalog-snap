@@ -43,6 +43,50 @@ describe('action.yml check step', () => {
     expect(r.log).toMatch(/^::error title=MCP catalog check failed::/m);
   });
 
+  it('server stderr cannot run workflow commands or close the summary code block', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-action-'));
+    // a server that writes workflow commands, a legacy ##[ command and a 4-backtick fence to stderr, without a final newline, then dies
+    const hostile = [
+      '::error title=pwned::injected from server stderr',
+      '::add-mask::x',
+      'text ##[warning]legacy command',
+      '````',
+      '## heading after a fence',
+      '```',
+      'last line without newline',
+    ].join('\n');
+    writeFileSync(join(dir, 'srv.cjs'), `process.stderr.write(${JSON.stringify(hostile)}); process.exit(1);`);
+    writeFileSync(join(dir, '.mcp-catalog.json'), JSON.stringify({ servers: [{ name: 'x', command: [process.execPath, join(dir, 'srv.cjs')] }] }));
+    const r = runActionCheck(dir);
+    expect(r.code).toBe(2);
+
+    // log: the server text sits between ::stop-commands::<token> and ::<token>::, each on a line of its own, before the action's ::error
+    const lines = r.stdout.split('\n');
+    const stop = lines.findIndex((l) => /^::stop-commands::[0-9a-f]{32}$/.test(l));
+    expect(stop).toBeGreaterThanOrEqual(0);
+    const token = lines[stop]!.slice('::stop-commands::'.length);
+    const resume = lines.indexOf(`::${token}::`);
+    const injected = lines.indexOf('::error title=pwned::injected from server stderr');
+    const legacy = lines.findIndex((l) => l.includes('##[warning]'));
+    const own = lines.findIndex((l) => l.startsWith('::error title=MCP catalog check failed::'));
+    expect(injected).toBeGreaterThan(stop);
+    expect(legacy).toBeGreaterThan(stop);
+    expect(lines.indexOf('last line without newline')).toBeLessThan(resume);
+    expect(resume).toBeGreaterThan(injected);
+    expect(own).toBeGreaterThan(resume);
+    expect(hostile).not.toContain(token);
+
+    // summary: the fence is longer than the longest backtick run in the server text, and closes after all of it
+    const sl = r.summary.split('\n');
+    const open = sl.findIndex((l) => /^`{3,}$/.test(l));
+    const fence = sl[open]!;
+    expect(fence.length).toBeGreaterThan(4);
+    const close = sl.indexOf(fence, open + 1);
+    expect(close).toBeGreaterThan(sl.indexOf('last line without newline'));
+    for (const l of sl.slice(open + 1, close)) expect(l).not.toBe(fence);
+    expect(sl.slice(open + 1, close).join('\n')).toContain('## heading after a fence');
+  });
+
   it('exit 0: summary, and the report output names a file that exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcs-action-'));
     const data = mkdtempSync(join(tmpdir(), 'mcs-action-data-'));

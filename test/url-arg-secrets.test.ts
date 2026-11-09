@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { describeTarget } from '../src/capture.js';
-import { targetSecrets } from '../src/redact.js';
+import { maskedArgs, targetSecrets } from '../src/redact.js';
 import { oneLine, scrubUrls } from '../src/safe-text.js';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -79,11 +79,18 @@ describe('targetSecrets / describeTarget', () => {
     expect(describeTarget({ kind: 'http', url: `https://u:p@h:8443/mcp?key=${CANARY}` })).toBe('https://h:8443/mcp [query redacted]');
     expect(describeTarget({ kind: 'http', url: 'https://h/mcp' })).toBe('https://h/mcp');
     expect(describeTarget({ kind: 'http', url: `https://h/mcp/${CANARY}A1/x` })).toBe('https://h/mcp/***/x');
-    // dogfood CS-11: show which server (command + args) failed, credentials masked
-    expect(
-      describeTarget({ kind: 'stdio', command: '/usr/local/bin/srv', args: ['--token', CANARY, '--profile', 'ro', `--api-key=${CANARY}k`, 'https://h/x?sig=1', `${CANARY}A1b2c3`] }),
-    ).toBe('srv --token *** --profile ro --api-key=*** https://h/x?[query redacted] ***');
-    expect(describeTarget({ kind: 'stdio', command: 'srv', args: [] })).toBe('srv');
+    // stdio: command basename + hash, never the arguments (0.2.0 review: masking patterns leaked); the masked form is defence in depth
+    expect(describeTarget({ kind: 'stdio', command: '/usr/local/bin/srv', args: ['--token', CANARY, '--profile', 'ro'] })).toMatch(/^srv#[0-9a-f]{8}$/);
+    expect(maskedArgs(['--token', CANARY, '--profile', 'ro', `--api-key=${CANARY}k`, 'https://h/x?sig=1', `${CANARY}A1b2c3`])).toEqual([
+      '--token',
+      '***',
+      '--profile',
+      'ro',
+      '--api-key=***',
+      'https://h/x?[query redacted]',
+      '***',
+    ]);
+    expect(describeTarget({ kind: 'stdio', command: 'srv', args: [] })).toMatch(/^srv#[0-9a-f]{8}$/);
   });
 });
 
@@ -152,11 +159,12 @@ describe('argument errors, scheme-less URLs, conflicting targets', () => {
     expect(run(['hash', 'snap.json', '--', 'node'], dir).stderr).toMatch(/not both/);
   });
 
-  it('error labels show the command and args, credentials masked', () => {
+  it('error labels show the command basename and a hash, never the args', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcs-sec-'));
     const r = run(['snapshot', '--', '/nonexistent/server', '--profile', 'ro', '--token', CANARY], dir);
     expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/error: server --profile ro --token \*\*\*: /);
+    expect(r.stderr).toMatch(/error: server#[0-9a-f]{8}: /);
+    expect(r.stderr).not.toMatch(/--profile/);
     expect(r.all).not.toContain(CANARY);
   });
 });

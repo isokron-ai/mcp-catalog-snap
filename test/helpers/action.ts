@@ -44,5 +44,5 @@ export function runActionCheck(dir: string, inputs: Record<string, string> = {},
     },
   });
   const read = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
-  return { code: r.status, log: `${r.stdout}\n${r.stderr}`, summary: read(summary), outputs: read(outputs) };
+  return { code: r.status, log: `${r.stdout}\n${r.stderr}`, stdout: r.stdout, summary: read(summary), outputs: read(outputs) };
 }

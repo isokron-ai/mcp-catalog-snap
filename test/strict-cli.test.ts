@@ -10,7 +10,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +19,9 @@ import { describe, expect, it } from 'vitest';
 
 import { parseArgs } from '../src/args.js';
 import { validateFlags } from '../src/cli-flags.js';
-import { readInputText } from '../src/read-input.js';
-import { buildSnapshot, serializeSnapshot } from '../src/snapshot.js';
+import { prettyCanonical } from '../src/canonical.js';
+import { MAX_INPUT_BYTES, readInputText } from '../src/read-input.js';
+import { SNAPSHOT_PRETTY_DEPTH, buildSnapshot, parseSnapshot, serializeSnapshot, snapshotSelfConsistent } from '../src/snapshot.js';
 
 import { budget } from './helpers/time.js';
 
@@ -122,8 +123,53 @@ describe('deep catalogs', () => {
       { server: { name: 's', version: '1' }, protocolVersion: null, tools: [{ name: 'a', description: 'x'.repeat(5000), inputSchema: { type: 'object' } }], prompts: [], resourceTemplates: [] },
       { capturedAt: 't' },
     );
-    expect(() => serializeSnapshot(snap, { maxBytes: 1000 })).toThrow(/snapshot would be \d+ bytes, over the 1000-byte limit/);
+    expect(() => serializeSnapshot(snap, { maxBytes: 1000 })).toThrow(/snapshot would be \d+ bytes even as compact JSON, over the 1000-byte limit/);
     expect(serializeSnapshot(snap).length).toBeGreaterThan(5000);
+  });
+
+  // 0.2.0 review (#12): compaction was triggered by depth only. A 5.5 MB schema 28 levels deep with 200k leaves
+  // (leaves at depth ~60, just above the depth-64 compaction) pretty-printed to ~79 MB and was refused.
+  it('a wide schema whose pretty form is over the read cap is written compact, and check, diff and hash FILE read it back', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcs-wide-'));
+    const env = { PATH: process.env['PATH'] ?? '', HOME: dir, MODE: 'wide' };
+    const run = (args: string[], live = true) =>
+      spawnSync(process.execPath, [CLI, ...args, ...(live ? ['--', process.execPath, HOSTILE] : [])], { encoding: 'utf8', cwd: dir, timeout: 120_000, env });
+    const s = run(['snapshot', '--name', 'wide']);
+    expect(s.status, s.stderr).toBe(0);
+    const file = join(dir, '.mcp-catalog', 'wide.json');
+    const text = readFileSync(file, 'utf8');
+    expect(text.length).toBeLessThan(8 * 1024 * 1024);
+    const snap = parseSnapshot(text, file);
+    expect(snapshotSelfConsistent(snap)).toBe(true);
+    // it really would have been over the cap pretty-printed
+    expect(prettyCanonical(snap, { compactFromDepth: SNAPSHOT_PRETTY_DEPTH }).length).toBeGreaterThan(MAX_INPUT_BYTES);
+    // entries still get their own lines (field values compact), not one line for the whole file
+    expect(text).toMatch(/^ {8}"inputSchema": \{"properties":/m);
+    expect(run(['check', '--name', 'wide']).status).toBe(0);
+    const live = run(['hash']).stdout.trim();
+    expect(live).toMatch(/^[0-9a-f]{64}$/);
+    expect(run(['hash', file], false).stdout.trim()).toBe(live);
+    expect(run(['diff', file, file], false).status).toBe(0);
+  });
+
+  it('size-triggered compaction steps down: depth 64, entry fields, whole file; same sha256 each time', () => {
+    const props: Record<string, unknown> = {};
+    for (let i = 0; i < 300; i++) props[`p${i}`] = { type: 'string', description: `field ${i}` };
+    const snap = buildSnapshot(
+      { server: { name: 's', version: '1' }, protocolVersion: null, tools: [{ name: 'a', inputSchema: { type: 'object', properties: props } }, { name: 'b', inputSchema: { type: 'object' } }], prompts: [], resourceTemplates: [] },
+      { capturedAt: 't' },
+    );
+    const pretty = serializeSnapshot(snap);
+    const fields = prettyCanonical(snap, { compactFromDepth: 4 });
+    const compact = prettyCanonical(snap, { compactFromDepth: 0 });
+    expect(compact.length).toBeLessThan(fields.length);
+    expect(fields.length).toBeLessThan(pretty.length);
+    expect(serializeSnapshot(snap, { maxBytes: pretty.length })).toBe(pretty);
+    expect(serializeSnapshot(snap, { maxBytes: pretty.length - 1 })).toBe(fields);
+    expect(serializeSnapshot(snap, { maxBytes: fields.length - 1 })).toBe(compact);
+    expect(compact.split('\n')).toHaveLength(2); // one line + trailing newline
+    for (const t of [pretty, fields, compact]) expect(snapshotSelfConsistent(parseSnapshot(t))).toBe(true);
+    expect(() => serializeSnapshot(snap, { maxBytes: compact.length - 1 })).toThrow(/even as compact JSON/);
   });
 });
 

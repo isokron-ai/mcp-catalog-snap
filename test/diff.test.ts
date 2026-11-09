@@ -140,13 +140,17 @@ describe('evaluate (drift policy)', () => {
     expect(waived.waived).toHaveLength(1);
   });
 
-  it('additions are drift by default and waived with allowAdditions', () => {
-    const after = catalog([...base.tools, { name: 'extra', inputSchema: { type: 'object' } }]);
+  it('additions are drift by default and waived with allowAdditions (read-only tools)', () => {
+    const after = catalog([...base.tools, { name: 'extra', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     const d = diffCatalogs(base, after);
     expect(evaluate(d).reasons).toEqual(['tool added: extra']);
     const v = evaluate(d, { allowAdditions: true });
     expect(v.drift).toBe(false);
     expect(v.waived).toEqual(['tool added: extra']);
+    // an added tool without annotations may write (spec default): allowAdditions alone does not waive it
+    const w = diffCatalogs(base, catalog([...base.tools, { name: 'extra', inputSchema: { type: 'object' } }]));
+    expect(evaluate(w, { allowAdditions: true }).reasons).toEqual(['tool added (destructive, not read-only): extra']);
+    expect(evaluate(w, { allowAdditions: true, allowWriteAdditions: true }).drift).toBe(false);
   });
 
   it('allowAdditions does not waive additions to a section the snapshot lists as empty', () => {
@@ -157,7 +161,7 @@ describe('evaluate (drift policy)', () => {
     expect(v.reasons).toEqual([
       'tools: snapshot lists none, live server lists 2 — --allow-additions waives additions only against a non-empty baseline; re-snapshot if this is intended',
       'tool added: get_doc',
-      'tool added: put_doc',
+      'tool added (destructive, not read-only): put_doc',
     ]);
     // same rule per section: a first prompt on a server whose snapshot has none is not waived
     const withPrompt = catalog(clone(base.tools), { prompts: [{ name: 'p' }] });
@@ -165,15 +169,15 @@ describe('evaluate (drift policy)', () => {
     expect(p.drift).toBe(true);
     expect(p.reasons[0]).toMatch(/^prompts: snapshot lists none, live server lists 1/);
     // and without allowAdditions nothing changes: plain additions, no baseline note
-    expect(evaluate(diffCatalogs(empty, base)).reasons).toEqual(['tool added: get_doc', 'tool added: put_doc']);
+    expect(evaluate(diffCatalogs(empty, base)).reasons).toEqual(['tool added: get_doc', 'tool added (destructive, not read-only): put_doc']);
   });
 
   it('allowAdditions waives additions against a non-empty baseline, whatever the size gap', () => {
     const one = catalog([clone(base.tools[0]!)]);
-    const many = catalog([...clone(base.tools), ...['c', 'd', 'e'].map((name) => ({ name, inputSchema: { type: 'object' } }))]);
-    const v = evaluate(diffCatalogs(one, many), { allowAdditions: true });
+    const many = catalog([...clone(base.tools), ...['c', 'd', 'e'].map((name) => ({ name, inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }))]);
+    const v = evaluate(diffCatalogs(one, many), { allowAdditions: true, allowWriteAdditions: true });
     expect(v.drift).toBe(false);
-    expect(v.waived).toEqual(['tool added: c', 'tool added: d', 'tool added: e', 'tool added: put_doc']);
+    expect(v.waived).toEqual(['tool added: c', 'tool added: d', 'tool added: e', 'tool added (destructive, not read-only): put_doc']);
     // two empty sections on both sides are not drift
     expect(evaluate(diffCatalogs(catalog([]), catalog([])), { allowAdditions: true }).drift).toBe(false);
   });
@@ -196,7 +200,7 @@ describe('evaluate (drift policy)', () => {
     after.tools[0]!.annotations = { readOnlyHint: false };
     const v = evaluate(diffCatalogs(base, after), { ignoreDescriptions: true });
     expect(v.drift).toBe(true);
-    expect(v.reasons).toEqual(['tool changed: get_doc (/annotations/readOnlyHint)']);
+    expect(v.reasons).toEqual(['tool became less safe: get_doc (read-only -> destructive)', 'tool changed: get_doc (/annotations/readOnlyHint)']);
     expect(v.waived).toEqual(['tool description changed: get_doc (/description)']);
   });
 });

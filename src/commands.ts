@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import { fingerprint } from './canonical.js';
 import { capture, describeTarget, type CaptureOptions, type Target } from './capture.js';
 import { DEFAULT_CONFIG_FILE, DEFAULT_SNAPSHOT_DIR, loadConfig, type ServerSpec } from './config.js';
-import { diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
+import { contradictoryAnnotations, diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
 import { renderDiff, renderSnapshotHeader, type CheckReport, type ServerResult } from './render.js';
 import {
   SnapshotIntegrityError,
@@ -47,6 +47,8 @@ export interface TargetSelection {
   target?: Target;
   /** Snapshot name override for an ad-hoc target. */
   name?: string;
+  /** Display label for an ad-hoc target in messages and reports (default: `name`, else command basename + hash, or URL origin + path). */
+  label?: string;
   /** Config file path (default .mcp-catalog.json, only if it exists). */
   config?: string;
   /** Only this configured server. */
@@ -78,11 +80,12 @@ function resolveTargets(sel: TargetSelection): Resolved {
   if (sel.target) {
     if (sel.server) throw new Error('--server selects a configured server; it cannot be combined with an ad-hoc target');
     return {
-      specs: [{ name: sel.name ?? '', target: sel.target }],
+      specs: [{ name: sel.name ?? '', target: sel.target, ...(sel.label !== undefined ? { label: sel.label } : {}) }],
       snapshotDir: resolve(cwd, sel.dir ?? DEFAULT_SNAPSHOT_DIR),
       adHoc: true,
     };
   }
+  if (sel.label !== undefined) throw new Error('--label names an ad-hoc target (`-- command` or --url); configured servers are labelled by their name');
   const configPath = resolve(cwd, sel.config ?? DEFAULT_CONFIG_FILE);
   if (!existsSync(configPath)) {
     throw new Error(
@@ -102,6 +105,21 @@ function resolveTargets(sel: TargetSelection): Resolved {
   }
   if (specs.length === 0) throw new Error(`${configPath} lists no servers`);
   return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false };
+}
+
+/** How messages and reports name a server: `--label`, else its name, else `describeTarget` (never the stdio arguments). */
+function labelOf(spec: ServerSpec): string {
+  return spec.label ?? (spec.name || describeTarget(spec.target));
+}
+
+/** Warn (stderr) about tools whose annotations contradict each other; classification still follows the spec (read-only). */
+function warnAnnotations(io: IO, server: string, snap: Snapshot): void {
+  for (const tool of contradictoryAnnotations(snap.catalog.tools)) {
+    io.err(
+      `warning: ${visible(server)}: tool ${visible(JSON.stringify(tool))} declares readOnlyHint: true and destructiveHint: true; ` +
+        'treated as read-only (destructiveHint only applies when readOnlyHint is false), check which is meant',
+    );
+  }
 }
 
 function snapshotPath(dir: string, name: string): string {
@@ -158,6 +176,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       const raw = await capture(spec.target, captureOpts(opts));
       const snap = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
+      warnAnnotations(io, name, snap);
       const text = serializeSnapshot(snap);
       assertNoSecrets(text, targetSecrets(spec.target), 'captured catalog');
       if (opts.noWrite) {
@@ -173,7 +192,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
       }
     } catch (err) {
       failures++;
-      io.err(`error: ${spec.name || describeTarget(spec.target)}: ${oneLine((err as Error).message)}`);
+      io.err(`error: ${visible(labelOf(spec))}: ${oneLine((err as Error).message)}`);
     }
   }
   return failures > 0 ? EXIT_ERROR : EXIT_OK;
@@ -202,15 +221,17 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   const policy: DriftPolicy = {
     ignoreDescriptions: opts.ignoreDescriptions ?? false,
     allowAdditions: opts.allowAdditions ?? false,
+    allowWriteAdditions: opts.allowWriteAdditions ?? false,
   };
   const results: ServerResult[] = [];
 
   for (const spec of resolved.specs) {
-    const label = spec.name || describeTarget(spec.target);
+    const label = labelOf(spec);
     try {
       const raw = await capture(spec.target, captureOpts(opts));
       const live = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
+      warnAnnotations(io, name, live);
       const path = snapshotPath(resolved.snapshotDir, name);
       if (!existsSync(path)) {
         throw new Error(`no snapshot at ${path} — run \`mcp-catalog-snap snapshot\` first`);
@@ -253,7 +274,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
         r.snapshotPath = err.path;
       }
       results.push(r);
-      if (!opts.json) io.err(`error: ${label}: ${oneLine((err as Error).message)}`);
+      if (!opts.json) io.err(`error: ${visible(label)}: ${oneLine((err as Error).message)}`);
     }
   }
 
@@ -263,7 +284,11 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   const report: CheckReport = {
     tool: `mcp-catalog-snap/${VERSION}`,
     ok: !anyError && !anyDrift,
-    policy: { ignoreDescriptions: policy.ignoreDescriptions ?? false, allowAdditions: policy.allowAdditions ?? false },
+    policy: {
+      ignoreDescriptions: policy.ignoreDescriptions ?? false,
+      allowAdditions: policy.allowAdditions ?? false,
+      allowWriteAdditions: policy.allowWriteAdditions ?? false,
+    },
     servers: scrubDeep(results, io.variants()),
   };
   if (opts.reportFile !== undefined) {
