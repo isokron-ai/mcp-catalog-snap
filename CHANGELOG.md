@@ -21,7 +21,9 @@ uses semantic versioning once past 0.x.
   heading and an `::error` for each. Repro: a read-only baseline checked
   against a server whose read-only mode failed open (github-mcp-server
   issue 3747) printed "+19 added" with no marker and passed with
-  `--allow-additions`.
+  `--allow-additions`. `snapshot` and `check` warn on stderr about a tool
+  that declares both `readOnlyHint: true` and `destructiveHint: true`
+  (classified read-only, per the spec, so `--allow-additions` waives it).
 
 - **Wire bytes vs model-visible tokens (#7).** The sweep reports two
   separate measures per tool and in totals: `wire` (canonical JSON of the
@@ -188,6 +190,10 @@ uses semantic versioning once past 0.x.
   signalled, so `bash -c "server; true"` or `sh -c "sleep & exec server"`
   left a grandchild holding the pipes and the CLI never exited. The
   server's stderr is forwarded through an owned pipe instead of inherited.
+  Processes that leave the group (`setsid` / `setpgid`, Node `detached:
+  true` children such as Puppeteer / Playwright browsers, Docker
+  containers, which outlive `docker run`) are not reaped; the README's
+  Limitations say how to run such servers (`docker run -i --rm --init`).
 - Action: every exit path writes a step summary and every failure an
   `::error` (exit 2, e.g. an unset `${VAR}` or a server that does not start,
   had neither); the `report` output is set only when the file exists. The

@@ -7,7 +7,7 @@
  *   "server": { "name": "kronicle-lite", "version": "0.2.0" },
  *   "protocolVersion": "2025-11-25",
  *   "capturedAt": "2026-10-31T23:00:00.000Z",
- *   "capturedWith": "mcp-catalog-snap/0.1.0",
+ *   "capturedWith": "mcp-catalog-snap/0.2.0",
  *   "sha256": "<sha256 of canonicalJson(catalog)>",
  *   "catalog": {
  *     "tools": [ ...sorted by name, every field tools/list returned... ],

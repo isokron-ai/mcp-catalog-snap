@@ -127,6 +127,10 @@ Policy flags:
   Action. This is the shape of a read-only deployment failing open (e.g.
   github-mcp-server issue 3747, `GITHUB_READ_ONLY=yes` ignored): the
   snapshot holds the read tools and the live server lists write tools too.
+  A tool that declares both `readOnlyHint: true` and `destructiveHint:
+  true` is classified read-only (the spec only reads `destructiveHint` when
+  `readOnlyHint` is false); `snapshot` and `check` print a `warning:` line
+  on stderr for it, since one of the two hints is wrong.
 
 Every command that reads a snapshot file (`check`, `diff`, `hash FILE`)
 first recomputes the sha256 of its `catalog` and compares it with the
@@ -350,7 +354,7 @@ A schema change reads the same way, with the path that moved:
 ```json
 {
   "capturedAt": "2026-10-31T23:01:48.036Z",
-  "capturedWith": "mcp-catalog-snap/0.1.0",
+  "capturedWith": "mcp-catalog-snap/0.2.0",
   "catalog": {
     "prompts": [],
     "resourceTemplates": [ { "uriTemplate": "kronicle://docs/{slug}", "...": "..." } ],
@@ -488,6 +492,17 @@ servers, checked in this repo's own CI:
   stderr is forwarded through a pipe the CLI closes, so even a process
   that escaped the group (`setsid`) cannot keep the CLI from exiting. On
   Windows the tree is ended with `taskkill /T /F` (not covered by CI).
+
+  Processes that leave the process group are **not reaped**: anything the
+  server starts with `setsid` / `setpgid`, Node `spawn(..., { detached:
+  true })` children (Puppeteer and Playwright launch their browsers this
+  way, so a browser-automation server can leave Chrome running), and
+  Docker containers. For Docker, `docker run` is only a client: ending it
+  does not stop the container, which keeps running under the daemon. Run
+  such servers as `docker run -i --rm --init …` (`--rm` removes the
+  container when it exits, `--init` forwards signals to the server inside
+  it and reaps its children), and in CI clean up leftovers yourself
+  (`docker ps`, `pkill -f chrome`) or give the job a timeout.
 
   | cap | value |
   | --- | --- |
