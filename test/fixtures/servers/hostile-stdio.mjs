@@ -2,6 +2,7 @@
 // Hostile stdio MCP server for tests: raw newline-delimited JSON-RPC (no SDK), so it can misbehave.
 // MODE=slowpages: every tools/list page takes 200 ms and points to another page.
 // MODE=deep: one tool whose schema nests DEPTH (default 50,000) levels.
+// MODE=wide: one tool whose schema nests DEPTH (default 27) object levels around LEAVES (default 200,000) string properties (~5.5 MB; ~79 MB pretty-printed).
 // MODE=readonly: READ_ONLY=1 lists read tools only; unset adds write/destructive/unannotated tools (LESS_SAFE=1 also flips list_issues).
 // MODE=big: tools/list answers with one ~1 MiB line (tests set a smaller message cap).
 // MODE=names: one tool; with ADD=1 also a tool whose name and property carry newlines, workflow commands and terminal escapes.
@@ -49,6 +50,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const n = Number(process.env.DEPTH ?? 50000);
     const open = '{"type":"object","properties":{"a":';
     process.stdout.write(`{"jsonrpc":"2.0","id":${JSON.stringify(msg.id)},"result":{"tools":[{"name":"deep","inputSchema":${open.repeat(n)}{"type":"string"}${'}}'.repeat(n)}}]}}\n`);
+  } else if (msg.method === 'tools/list' && MODE === 'wide') {
+    const n = Number(process.env.DEPTH ?? 27);
+    const leaves = Array.from({ length: Number(process.env.LEAVES ?? 200000) }, (_, i) => `"p${i}":{"type":"string"}`).join(',');
+    const open = '{"type":"object","properties":{"n":';
+    process.stdout.write(`{"jsonrpc":"2.0","id":${JSON.stringify(msg.id)},"result":{"tools":[{"name":"wide","inputSchema":${open.repeat(n)}{"type":"object","properties":{${leaves}}}${'}}'.repeat(n)}}]}}\n`);
   } else if (msg.method === 'tools/list' && MODE === 'readonly') {
     // github-mcp-server issue 3747 shape: with READ_ONLY=yes only read tools; without it (fail-open) write and destructive tools appear
     const ro = { readOnlyHint: true };

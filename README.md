@@ -93,9 +93,10 @@ two, the others none), and input files (`--from`, snapshots, config,
 `--call-results`, `--bearer-file`) are read up to 64 MiB (64 KiB for a
 bearer file). Pipes such as `--from <(…)` or `/dev/stdin` work but must
 deliver their input within 30 s; a named FIFO gets 5 s for a writer and
-then fails instead of hanging; a UTF-8 BOM is ignored. `snapshot` refuses,
-before writing, a file larger than the 64 MiB that `check`, `diff` and
-`hash` read.
+then fails instead of hanging; a UTF-8 BOM is ignored. `snapshot` writes a
+file that would be larger than the 64 MiB that `check`, `diff` and `hash`
+read in a more compact form (see [Snapshot format](#snapshot-format)), and
+refuses, before writing, one that is over it even as compact JSON.
 
 `--url` targets take `--bearer-file FILE` (first line) or `--bearer-env VAR`
 for `Authorization: Bearer …` (stdio servers: `--env`; config files:
@@ -366,9 +367,14 @@ A schema change reads the same way, with the path that moved:
   around `catalog`); the file is the canonical form pretty-printed so git
   diffs stay readable. Values nested 64 levels or deeper are written as
   compact JSON on one line (indentation would otherwise grow quadratically:
-  a 6,000-level schema of 222 KB pretty-printed to 360 MB). Bidi, invisible
-  and C1 characters inside strings are written as `\u` escapes. Neither
-  changes the values or `sha256`.
+  a 6,000-level schema of 222 KB pretty-printed to 360 MB). If the file
+  would still be over the 64 MiB that `check`, `diff` and `hash` read (a
+  wide schema: 5.5 MB of JSON 28 levels deep with 200k leaves
+  pretty-prints to ~79 MB), each tool, prompt and template keeps its own
+  lines but writes its field values compact, and failing that the whole
+  file is compact JSON. Bidi, invisible and C1 characters inside strings
+  are written as `\u` escapes. None of this changes the values or
+  `sha256`.
 - `sha256` covers the compact canonical bytes of `catalog` only. A server
   version bump or a new capture time does not change it. Think of it as the
   **cache-prefix fingerprint**: same hash, same tool bytes.

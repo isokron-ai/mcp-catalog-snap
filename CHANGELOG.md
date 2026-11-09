@@ -74,8 +74,12 @@ uses semantic versioning once past 0.x.
   FIFO must deliver its input within 30 s (a trickling writer hung the
   CLI). Snapshot files write values nested 64+ levels deep as compact JSON:
   a 222 KB tools/list 6,000 levels deep used to produce a 360 MB file that
-  `check`/`diff`/`hash` then refused (64 MiB read cap); `snapshot` also
-  refuses, before writing, any file over that cap.
+  `check`/`diff`/`hash` then refused (64 MiB read cap). Compaction is also
+  triggered by size: a file that would still be over the cap writes each
+  catalog entry's field values compact (entries keep their own lines), then
+  falls back to fully compact JSON (a 5.5 MB schema 28 levels deep with
+  200k leaves pretty-printed to ~79 MB and was refused); `snapshot`
+  refuses, before writing, only a file over the cap even as compact JSON.
 - Sweep reports `totals.modelVisibleFieldSum` (each model-visible field
   tokenized on its own) next to `totals.modelVisible` (one object per tool)
   and explain the gap in the report and README (dogfood CS-5: 10,732 vs a
