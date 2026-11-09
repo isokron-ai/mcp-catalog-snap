@@ -53,7 +53,12 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
 
   L.push(`# MCP static sweep: ${mdText(r.server.name)}${r.server.version ? ` ${mdText(r.server.version)}` : ''}`);
   L.push('');
-  L.push(`> Token figures are **catalog exposure**: every tool counted once, as if the full catalog were loaded. They are not session or task exposure.`);
+  const fields = r.measurement.modelVisibleFields;
+  L.push(
+    fields
+      ? `> **Model-visible** = what the model reads (${fields.map((f) => `\`${f}\``).join(', ')}); **wire** = the whole tools/list entry (icons, \`_meta\` and \`outputSchema\` included), which clients do not pass to the model. Budgets apply to model-visible tokens. Every tool is counted once, as if the full catalog were loaded: not session or task exposure.`
+      : `> **Model-visible** and **wire** are both the adapter's per-tool text (see "measured as" below). Budgets apply to model-visible tokens. Every tool is counted once, as if the full catalog were loaded: not session or task exposure.`,
+  );
   for (const t of r.measurement.tokenizers) L.push(`> \`${t.id}\`: ${mdText(t.label, 200)}.`);
   L.push('');
   row(['', 'value']);
@@ -63,7 +68,8 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   row(['protocol', r.protocolVersion ? mdText(r.protocolVersion) : 'unknown']);
   row(['catalog fingerprint', `\`${r.fingerprints.catalog}\``]);
   row(['tools-ordered fingerprint (ADR-0005)', r.fingerprints.toolsOrdered ? `\`${r.fingerprints.toolsOrdered}\`` : 'n/a']);
-  row(['exposure measured as', mdText(r.measurement.exposure, 200)]);
+  row(['model-visible measured as', mdText(r.measurement.modelVisible, 200)]);
+  row(['wire measured as', mdText(r.measurement.wire, 200)]);
   row(['generator', `\`${r.generator}\` · report \`${r.format}\``]);
   L.push('');
 
@@ -73,17 +79,18 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   L.push('');
   row(['measure', 'bytes', ...tokIds.map((id) => `${id} tokens`)]);
   row(['---', ...Array<string>(tokIds.length + 1).fill('---:')]);
-  row(['**exposure (all tools)**', ...measureCells(r.totals.exposure)]);
+  row(['**model-visible (all tools)**', ...measureCells(r.totals.modelVisible)]);
+  row(['wire (whole tools/list entries)', ...measureCells(r.totals.wire)]);
   for (const [f, m] of Object.entries(r.totals.fields)) row([`field \`${f}\``, ...measureCells(m)]);
   for (const [v, m] of Object.entries(r.totals.views)) row([`view \`${mdText(v)}\``, ...measureCells(m)]);
   if (r.totals.embeddedSchema) {
     row([`embedded schema, escaped (${n(r.totals.embeddedSchema.tools)} tools)`, ...measureCells(r.totals.embeddedSchema.escaped)]);
     row(['embedded schema, as plain JSON', ...measureCells(r.totals.embeddedSchema.plain)]);
   }
-  if (r.totals.wrapper) row([`wrapper tools/list (${r.totals.wrapper.tools.map((t) => mdCode(t)).join(', ')})`, ...measureCells(r.totals.wrapper.exposure)]);
+  if (r.totals.wrapper) row([`wrapper tools/list (${r.totals.wrapper.tools.map((t) => mdCode(t)).join(', ')})`, ...measureCells(r.totals.wrapper.wire)]);
   L.push('');
-  const d = r.totals.exposurePerTool;
-  L.push(`Per-tool exposure (${tk}): median ${n(d.median)}, p90 ${n(d.p90)}, max ${n(d.max)}.`);
+  const d = r.totals.modelVisiblePerTool;
+  L.push(`Per-tool model-visible (${tk}): median ${n(d.median)}, p90 ${n(d.p90)}, max ${n(d.max)}.`);
   if (r.anthropic) {
     L.push('');
     if ('skipped' in r.anthropic) L.push(`Anthropic count_tokens: skipped (${mdText(r.anthropic.skipped)}).`);
@@ -98,12 +105,14 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   L.push('');
   const b = r.budget;
   if (b.toolTokens === null && b.catalogTokens === null) {
-    L.push(`No budget set (advisory per-tool threshold: ${n(b.advisoryToolTokens)} ${b.tokenizer} tokens). Set \`--max-tool-tokens\` / \`--max-catalog-tokens\` to fail CI (exit 4).`);
+    L.push(
+      `No budget set (advisory per-tool threshold: ${n(b.advisoryToolTokens)} ${b.tokenizer} model-visible tokens). Set \`--max-tool-tokens\` / \`--max-catalog-tokens\` to fail CI (exit 4). Budgets apply to model-visible tokens.`,
+    );
   } else {
-    L.push(b.exceeded ? '**Budget exceeded.**' : 'Within budget.');
+    L.push(`${b.exceeded ? '**Budget exceeded.**' : 'Within budget.'} Budgets apply to model-visible tokens.`);
     L.push('');
     if (b.toolTokens !== null) L.push(`- per tool: ${n(b.toolTokens)} ${b.tokenizer} tokens, ${n(b.toolsOver.length)} tool(s) over${b.toolsOver.length ? `: ${b.toolsOver.slice(0, 10).map((t) => mdCode(t)).join(', ')}${b.toolsOver.length > 10 ? ', …' : ''}` : ''}`);
-    if (b.catalogTokens !== null) L.push(`- catalog: ${n(b.catalogTokens)} ${b.tokenizer} tokens, ${b.catalogOver ? 'over' : 'within'} (${n(r.totals.exposure.tokens[b.tokenizer] ?? 0)})`);
+    if (b.catalogTokens !== null) L.push(`- catalog: ${n(b.catalogTokens)} ${b.tokenizer} tokens, ${b.catalogOver ? 'over' : 'within'} (${n(r.totals.modelVisible.tokens[b.tokenizer] ?? 0)})`);
   }
   L.push('');
 
@@ -124,13 +133,22 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
     L.push('');
   }
 
-  L.push(`## Largest tools (${tk})`);
+  L.push(`## Largest tools (model-visible ${tk})`);
   L.push('');
-  row(['#', 'tool', `${tk} tokens`, 'bytes', 'dup %', 'largest enum', 'findings']);
-  row(['---:', '---', '---:', '---:', '---:', '---:', '---:']);
-  const largest = [...r.tools].sort((a, b) => (b.exposure.tokens[tk] ?? 0) - (a.exposure.tokens[tk] ?? 0) || (a.name < b.name ? -1 : 1)).slice(0, top);
+  row(['#', 'tool', `model-visible ${tk} tokens`, 'model-visible bytes', 'wire bytes', 'dup %', 'largest enum', 'findings']);
+  row(['---:', '---', '---:', '---:', '---:', '---:', '---:', '---:']);
+  const largest = [...r.tools].sort((a, b) => (b.modelVisible.tokens[tk] ?? 0) - (a.modelVisible.tokens[tk] ?? 0) || (a.name < b.name ? -1 : 1)).slice(0, top);
   largest.forEach((t, i) =>
-    row([String(i + 1), mdCode(t.name), n(t.exposure.tokens[tk] ?? 0), n(t.exposure.bytes), `${Math.round(t.duplicates.share * 1000) / 10}`, n(t.choiceLists.largest), n(t.findings)]),
+    row([
+      String(i + 1),
+      mdCode(t.name),
+      n(t.modelVisible.tokens[tk] ?? 0),
+      n(t.modelVisible.bytes),
+      n(t.wire.bytes),
+      `${Math.round(t.duplicates.share * 1000) / 10}`,
+      n(t.choiceLists.largest),
+      n(t.findings),
+    ]),
   );
   L.push('');
 

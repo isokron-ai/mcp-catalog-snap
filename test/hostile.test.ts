@@ -190,7 +190,7 @@ describe('prototype-named tools and properties are plain data', () => {
     const input = parseToolsListFile(JSON.stringify({ tools }), 'p.json');
     const r = runSweep(input, { tokenizers: [t!] });
     expect(r.tools.map((x) => x.name)).toEqual([...NAMES].sort());
-    expect(r.tools.every((x) => x.exposure.bytes > 0)).toBe(true);
+    expect(r.tools.every((x) => x.modelVisible.bytes > 0)).toBe(true);
     const req = r.findings.filter((f) => f.rule === 'required-not-in-properties');
     expect(req.map((f) => f.data?.['property'])).toEqual(NAMES.map(() => 'toString'));
     expect(r.findings.filter((f) => f.rule === 'default-invalid')).toHaveLength(NAMES.length);
@@ -215,7 +215,7 @@ describe('prototype-named tools and properties are plain data', () => {
     expect(Object.keys(anthropic.perTool).sort()).toEqual([...NAMES].sort());
     const r = runSweep(input, { tokenizers: [t!], anthropic });
     expect(r.tools.map((x) => x.anthropicTokens)).toEqual(NAMES.map(() => 10));
-    expect(r.tools.every((x) => x.exposure.tokens['cl100k']! > 0)).toBe(true);
+    expect(r.tools.every((x) => x.modelVisible.tokens['cl100k']! > 0)).toBe(true);
     expect(r.findings.filter((f) => f.data?.['view'] === 'schema')).toHaveLength(NAMES.length);
   });
 

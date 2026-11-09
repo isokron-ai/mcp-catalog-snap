@@ -8,6 +8,27 @@ uses semantic versioning once past 0.x.
 
 ### Added
 
+- **Wire bytes vs model-visible tokens (#7).** The sweep reports two
+  separate measures per tool and in totals: `wire` (canonical JSON of the
+  whole `tools/list` entry, icons and `_meta` included) and `modelVisible`
+  (canonical JSON of `name`, `description`, `inputSchema`; `title` is a
+  display name and is not counted).
+  Budgets, `modelVisiblePerTool`, the `modelVisibleTokens` histogram and
+  the largest-tools table use model-visible tokens. `annotations` are not
+  model-visible unless `--count-annotations` is given;
+  `measurement.modelVisibleFields` and `measurement.budgetsApplyTo` record
+  the choice. Before this, the single `exposure` figure counted base64
+  `icons`, overstating what the model sees about 5x on github-mcp-server
+  v2.1.0 (119,633 vs 22,347 cl100k tokens). `exposure`, `exposurePerTool`
+  and `histograms.exposureTokens` are gone (the `sweep/1` format has not
+  been released yet, so the format id is unchanged).
+- Per-field breakdown adds `icons`, `_meta` and `other` (every field not
+  broken out), next to `outputSchema`.
+- Findings `icon-data-uri-large` (a `data:` URI icon over
+  `--max-icon-bytes`, default 4096) and `icon-data-uri-duplicated` (the
+  same `data:` URI repeated across the catalog; github-mcp-server v2.1.0
+  sends 182 copies of 48 images).
+
 - **`sweep` command: the free static sweep.** Input: a live stdio or
   Streamable HTTP server, `--from FILE` (tools/list result, JSON-RPC
   response, tools array, snapshot, or an exec JSONL dump), `--adapter
@@ -32,6 +53,11 @@ uses semantic versioning once past 0.x.
   URL path segments are masked in report sources.
 
 ### Changed
+
+- `package.json` is `0.2.0-dev`, so the report `generator`, the snapshot
+  `capturedWith` and `--version` no longer claim 0.1.1 for unreleased
+  0.2 code; a test keeps the version ahead of the last released one while
+  `[Unreleased]` has entries.
 
 - Tokenizer backend is `gpt-tokenizer` (same cl100k/o200k counts, verified
   against Python tiktoken; linear on hostile input) instead of

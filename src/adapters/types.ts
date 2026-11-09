@@ -2,11 +2,12 @@
  * Adapter interface: turn a server (live or saved) into what the sweep
  * measures.
  *
- * Plain servers expose their contract in `tools/list`, so the exposure of a
- * tool is its list entry. CLI/exec-style servers (one `exec` tool with
+ * Plain servers expose their contract in `tools/list`, so a tool's wire text
+ * is its list entry and its model-visible text is the projection of that
+ * entry onto the fields clients pass to the model. CLI/exec-style servers (one `exec` tool with
  * `tools` / `info` / `schema` sub-commands, like PostHog's) expose each
  * sub-tool's contract as command *output* text, so the adapter fetches that
- * text and says which view is the primary exposure. Everything after the
+ * text and says which view is what the model reads. Everything after the
  * adapter (metrics, findings, report) is the same for both.
  */
 
@@ -28,10 +29,19 @@ export interface SweepInput {
   catalog: Catalog;
   /** Tools in server order for the ADR-0005 fingerprint; null when the order is unknown. */
   orderedTools: unknown[] | null;
-  /** What `exposure` means, carried into the report. */
-  exposureLabel: string;
-  /** Per tool: the primary text the model is shown for it. Missing → JCS of the entry. Maps, never objects: tool names are untrusted keys. */
-  exposure: Map<string, string>;
+  /** What `modelVisible` / `wire` mean, carried into the report. */
+  modelVisibleLabel: string;
+  wireLabel: string;
+  /**
+   * Per tool: the text the model is shown for it, when the adapter knows it
+   * (exec: the `info` output). Missing → JCS of the model-visible fields.
+   * Maps, never objects: tool names are untrusted keys.
+   */
+  modelVisible: Map<string, string>;
+  /** True when `modelVisible` holds the adapter's own text for every tool (no field projection applies). */
+  modelVisibleFromAdapter: boolean;
+  /** Per tool: the text that crosses the wire for it. Missing → JCS of the whole entry. */
+  wire: Map<string, string>;
   /** Per tool: further named views (e.g. exec `schema` output). */
   views: Map<string, Map<string, string>>;
   /** Per tool: a schema carried as an escaped string inside text, and the same schema as plain JSON. */

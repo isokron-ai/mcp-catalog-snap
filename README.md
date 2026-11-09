@@ -8,8 +8,8 @@
 byte that changed — a schema field, an annotation, a reworded description —
 is reported with its JSON path, and the exit code is 1.
 
-`mcp-catalog-snap sweep` is the free static sweep: bytes and reference
-tokens per tool, per-tool contract fingerprints, and schema findings
+`mcp-catalog-snap sweep` is the free static sweep: model-visible tokens
+and wire bytes per tool, per-tool contract fingerprints, and schema findings
 (enum blowups, duplicated subtrees, untyped fields, invalid schemas,
 annotation contradictions…) as a versioned JSON report plus a markdown
 summary. See [Static sweep](#static-sweep).
@@ -128,22 +128,44 @@ mcp-catalog-snap sweep --adapter posthog-exec --url "$POSTHOG_MCP_URL" \
   --bearer-file ~/.posthog-key --save-raw posthog.jsonl
 mcp-catalog-snap sweep --adapter posthog-exec --from posthog.jsonl   # byte-identical re-run
 
-# CI: fail when any tool is over 4,000 tokens or the catalog over 60,000
+# CI: fail when any tool is over 4,000 model-visible tokens or the catalog over 60,000
 mcp-catalog-snap sweep --from tools.json --max-tool-tokens 4000 --max-catalog-tokens 60000
 ```
 
 stdout is the markdown summary (`--json` prints the JSON report instead).
 
-**What a number means.** Every token figure is *catalog exposure*: each
-tool counted once, as if the whole catalog were loaded. It is not session
-exposure (what one client loaded) or task exposure (what an agent pulled).
-`cl100k` (tiktoken cl100k_base) is a reference scale for comparing servers,
-not a Claude tokenizer; every count carries its tokenizer label.
+**What a number means.** Each tool gets two separate measures:
+
+- **model-visible**: what the model reads. The canonical JSON of only the
+  fields clients pass to the model: `name`, `description`, `inputSchema`
+  (Anthropic's tool definition: `name`, `description`, `input_schema`). **Budgets, the per-tool distribution, the histogram and
+  the largest-tools ranking use this.**
+- **wire**: what crosses the wire. The canonical JSON of the whole
+  `tools/list` entry, including `icons` (often base64 `data:` URIs),
+  `_meta`, `outputSchema` and `annotations`. Clients do not forward these
+  to the model, so wire size is a transport cost, not a context cost: on
+  github-mcp-server v2.1.0 (91 tools) wire is 119,633 cl100k tokens and
+  model-visible 22,347, because the icons are 145 KB of the 260 KB.
+
+`annotations` are **not** model-visible by default: they are hints a client
+uses for permissions and UI (Anthropic's tool definition is `name`,
+`description`, `input_schema`). `--count-annotations` counts them as
+model-visible when your client does forward them; the report records the
+choice in `measurement.modelVisibleFields`. `title` is a display name for
+UIs and is not counted (it is in the per-field breakdown and in wire). Both measures are
+reference texts: clients re-serialize definitions their own way.
+
+Every figure is catalog-wide: each tool counted once, as if the whole
+catalog were loaded. It is not session exposure (what one client loaded)
+or task exposure (what an agent pulled). `cl100k` (tiktoken cl100k_base)
+is a reference scale for comparing servers, not a Claude tokenizer; every
+count carries its tokenizer label.
 
 | measured | how |
 | --- | --- |
-| exposure | `tools-list`: the RFC 8785 canonical JSON of each `tools/list` entry. Exec adapters: the `info <tool>` output text the wrapper returns |
-| fields | `name`, `title`, `description` (raw text), `inputSchema`, `outputSchema`, `annotations` (canonical JSON) |
+| model-visible | `tools-list`: RFC 8785 canonical JSON of `{name, description, inputSchema}` (+ `annotations` with `--count-annotations`). Exec adapters: the `info <tool>` output text the wrapper returns |
+| wire | `tools-list`: RFC 8785 canonical JSON of the whole `tools/list` entry. Exec adapters: the same `info` text |
+| fields | `name`, `title`, `description` (raw text), `inputSchema`, `outputSchema`, `annotations`, `icons`, `_meta` (canonical JSON), `other` (every remaining field together) |
 | views | exec adapters: unsummarized `info`, `info --json`, `schema` outputs |
 | embedded schema | exec adapters: the schema as an escaped string inside `info` vs as plain JSON |
 | tokenizers | `--tokenizers cl100k,o200k,chars4` (default `cl100k`; `chars4` = `ceil(chars/4)`, the heuristic some servers use for limits) |
@@ -178,14 +200,16 @@ not a Claude tokenizer; every count carries its tokenizer label.
 | `escaped-json` | JSON carried inside a string (a default, or the exec `info` payload) |
 | `untyped-node` | `{}` nodes, `items: {}`, opaque objects; exec `schema` views with `type: "unknown"` |
 | `description-oversize` | a description over `--max-description-bytes` (default 16384) |
-| `oversize-tool`, `oversize-catalog` | exposure over the budget (advisory 5,000 per tool when no budget is set) |
+| `oversize-tool`, `oversize-catalog` | model-visible tokens over the budget (advisory 5,000 per tool when no budget is set) |
+| `icon-data-uri-large`, `icon-data-uri-duplicated` | a `data:` URI icon over `--max-icon-bytes` (default 4096); the same `data:` URI sent more than once in one `tools/list` (one catalog-level finding with copies, unique images and repeated bytes) |
 | `schema-too-deep`, `analysis-budget-exceeded` | nesting past 64 levels, or a tool past its deterministic work budget: the rest of that tool is not analyzed |
 | `annotations-missing`, `annotation-contradiction` | no `readOnlyHint`/`destructiveHint`; a `delete`/`remove`/… tool with `destructiveHint: false` or `readOnlyHint: true`; both hints true |
 | `output-duplication-risk`, `structured-content-duplicated` | `outputSchema` declared (results may repeat `structuredContent` as text); with `--call-results FILE` (JSONL `{"tool","result"}`), observed duplication |
 
 **Report** (`--report FILE` / `--json`): `format: "mcp-catalog-snap/sweep/1"`,
 then `server`, `source` (URL origin + path, or the stdio command basename:
-never credentials), `measurement`, `fingerprints`, `totals`, `histograms`,
+never credentials), `measurement` (what `wire` and `modelVisible` mean,
+`modelVisibleFields`, `budgetsApplyTo`), `fingerprints`, `totals`, `histograms`,
 `budget`, `anthropic`, `findingsSummary`, `tools[]`, `findings[]`, `notes`.
 The output is deterministic: no timestamps, tools and findings sorted, so
 the same input gives a byte-identical report. Additive fields keep the
@@ -362,6 +386,10 @@ servers, checked in this repo's own CI:
 - The sweep is static. It reads the catalog only (exec adapters run
   read-only `tools` / `info` / `schema` commands, never `call`), so it says
   nothing about response sizes, errors or task success.
+- Model-visible is a field projection, not a client trace. A tool that an
+  MCP Apps host hides from the model (`_meta.ui.visibility: ["app"]`) is
+  still counted, and a client that forwards more (annotations: use
+  `--count-annotations`) or less than the projected fields differs from it.
 - The exec adapter's live mode trusts `info --json` for the contract; a
   server that summarizes large schemas there yields summarized contracts.
   Offline dumps that carry `full_schema` do not have this limit.

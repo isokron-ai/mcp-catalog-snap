@@ -59,10 +59,13 @@ sweep options:
   --name NAME           server name to report
   --tokenizers LIST     comma list of cl100k (default), o200k, chars4
   --budget-tokenizer ID tokenizer budgets and rankings use (default cl100k)
-  --max-tool-tokens N   fail (exit 4) when any tool's exposure is over N tokens
-  --max-catalog-tokens N  fail (exit 4) when the whole catalog's exposure is over N tokens
+  --max-tool-tokens N   fail (exit 4) when any tool's model-visible size is over N tokens
+  --max-catalog-tokens N  fail (exit 4) when the whole catalog's model-visible size is over N tokens
+  --count-annotations   count annotations as model-visible (default: name,
+                        description, inputSchema only; wire size always counts everything)
   --enum-max N          enum size that triggers enum-large (default 20)
   --max-description-bytes N  description size that triggers description-oversize (default 16384)
+  --max-icon-bytes N    data: URI icon size that triggers icon-data-uri-large (default 4096)
   --anthropic           also ask Anthropic count_tokens (needs ANTHROPIC_API_KEY; sends the catalog)
   --anthropic-model M   model for --anthropic (default claude-opus-5-5)
   --call-results FILE   JSONL of {"tool", "result"} observed tools/call results to check
@@ -86,7 +89,7 @@ function num(args: ParsedArgs, key: string, integer = true): number | undefined 
 }
 
 function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs>): SweepCommandOptions {
-  const o: SweepCommandOptions = { json: bool(args.flags['json']), anthropic: bool(args.flags['anthropic']) };
+  const o: SweepCommandOptions = { json: bool(args.flags['json']), anthropic: bool(args.flags['anthropic']), countAnnotations: bool(args.flags['count-annotations']) };
   const set = <K extends keyof SweepCommandOptions>(k: K, v: SweepCommandOptions[K] | undefined): void => {
     if (v !== undefined) o[k] = v;
   };
@@ -102,6 +105,7 @@ function sweepOptions(args: ParsedArgs, target: ReturnType<typeof targetFromArgs
   set('maxCatalogTokens', num(args, 'max-catalog-tokens'));
   set('enumMax', num(args, 'enum-max'));
   set('maxDescriptionBytes', num(args, 'max-description-bytes'));
+  set('maxIconBytes', num(args, 'max-icon-bytes'));
   set('anthropicModel', str(args.flags['anthropic-model']));
   set('callResults', str(args.flags['call-results']));
   set('saveRaw', str(args.flags['save-raw']));

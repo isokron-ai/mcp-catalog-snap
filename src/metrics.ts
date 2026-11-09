@@ -2,12 +2,17 @@
  * Per-tool size metrics and contract fingerprints.
  *
  * What is measured for a `tools/list` entry:
- *   - `total`: the compact RFC 8785 (JCS) serialization of the whole entry,
- *     i.e. exactly the bytes `fingerprint` hashes. Clients re-serialize tool
- *     definitions in their own way, so this is a stable reference text, not
- *     the literal prompt bytes of any one client.
+ *   - `wire` (`total`): the compact RFC 8785 (JCS) serialization of the whole
+ *     entry, i.e. exactly the bytes `fingerprint` hashes, icons and `_meta`
+ *     included. This is what crosses the wire, not what the model reads.
+ *   - `modelVisible`: JCS of only the fields clients pass to the model:
+ *     `name`, `description`, `inputSchema` (and `annotations` when asked).
+ *     `title` is a display name and is not counted. Clients re-serialize tool definitions in their own way, so
+ *     both are stable reference texts, not the literal prompt bytes of any
+ *     one client.
  *   - per field: `name`, `title`, `description` as their raw string value;
- *     `inputSchema`, `outputSchema`, `annotations` as compact JCS.
+ *     `inputSchema`, `outputSchema`, `annotations`, `icons`, `_meta` as
+ *     compact JCS; `other` = JCS of every remaining field together.
  *
  * Fingerprints (per tool):
  *   - `fingerprint`: the *contract* fingerprint, sha256 of
@@ -24,7 +29,7 @@
  *     same `tools/list` array.
  */
 
-import { canonicalJson, fingerprint } from './canonical.js';
+import { canonicalJson, fingerprint, setOwn } from './canonical.js';
 import type { CatalogTool } from './snapshot.js';
 import { utf8Bytes, type Tokenizer } from './tokenize.js';
 
@@ -34,8 +39,23 @@ export interface Measure {
   tokens: Record<string, number>;
 }
 
-export const TOOL_FIELDS = ['name', 'title', 'description', 'inputSchema', 'outputSchema', 'annotations'] as const;
+/** Named fields of a tools/list entry; `other` is every remaining field, measured together. */
+export const TOOL_FIELDS = ['name', 'title', 'description', 'inputSchema', 'outputSchema', 'annotations', 'icons', '_meta', 'other'] as const;
 export type ToolField = (typeof TOOL_FIELDS)[number];
+
+/** Fields counted as model-visible: what clients pass to the model (Anthropic: name, description, input_schema). `title` is a display name. */
+export const MODEL_VISIBLE_FIELDS = ['name', 'description', 'inputSchema'] as const;
+/** `annotations` are client hints (permissions, UI); counted as model-visible only on request. */
+export const MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS = [...MODEL_VISIBLE_FIELDS, 'annotations'] as const;
+
+/** JCS of the model-visible projection of a tools/list entry. */
+export function modelVisibleText(tool: CatalogTool, withAnnotations = false): string {
+  const o: Record<string, unknown> = {};
+  for (const f of withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS) {
+    if (Object.hasOwn(tool, f) && tool[f] !== undefined) setOwn(o, f, tool[f]);
+  }
+  return canonicalJson(o);
+}
 
 export interface ToolMetrics {
   name: string;
@@ -45,8 +65,10 @@ export interface ToolMetrics {
   descriptionFingerprint: string;
   /** sha256 of JCS(whole entry). */
   entryFingerprint: string;
-  /** JCS of the whole entry. */
+  /** JCS of the whole entry (wire). */
   total: Measure;
+  /** JCS of the model-visible projection. */
+  modelVisible: Measure;
   /** Only fields present on the entry. */
   fields: Partial<Record<ToolField, Measure>>;
 }
@@ -74,18 +96,30 @@ function fieldText(value: unknown): string {
   return typeof value === 'string' ? value : canonicalJson(value);
 }
 
-export function measureTool(tool: CatalogTool, tokenizers: readonly Tokenizer[]): ToolMetrics {
+export function measureTool(tool: CatalogTool, tokenizers: readonly Tokenizer[], opts: { modelVisibleAnnotations?: boolean } = {}): ToolMetrics {
   const fields: Partial<Record<ToolField, Measure>> = {};
+  // a field literally named `other` is not a named field: it is measured with the rest
+  const named = new Set<string>(TOOL_FIELDS.filter((f) => f !== 'other'));
   for (const f of TOOL_FIELDS) {
-    const v = tool[f];
+    if (f === 'other') continue;
+    const v = Object.hasOwn(tool, f) ? tool[f] : undefined;
     if (v !== undefined) fields[f] = measure(fieldText(v), tokenizers);
   }
+  const rest: Record<string, unknown> = {};
+  let restCount = 0;
+  for (const k of Object.keys(tool)) {
+    if (named.has(k) || tool[k] === undefined) continue;
+    setOwn(rest, k, tool[k]);
+    restCount++;
+  }
+  if (restCount > 0) fields.other = measure(canonicalJson(rest), tokenizers);
   return {
     name: tool.name,
     fingerprint: contractFingerprint(tool),
     descriptionFingerprint: fingerprint(tool.description ?? null),
     entryFingerprint: fingerprint(tool),
     total: measure(canonicalJson(tool), tokenizers),
+    modelVisible: measure(modelVisibleText(tool, opts.modelVisibleAnnotations ?? false), tokenizers),
     fields,
   };
 }

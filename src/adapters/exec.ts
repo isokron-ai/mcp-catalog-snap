@@ -144,7 +144,7 @@ export function sweepInputFromExecRecords(
   meta: Pick<SweepInput, 'server' | 'protocolVersion' | 'source'> & { adapter: string; wrapperTools?: CatalogTool[] | null; marker?: string; notes?: string[] },
 ): SweepInput {
   const marker = meta.marker ?? POSTHOG_EXEC.infoSchemaMarker!;
-  const exposure: SweepInput['exposure'] = new Map();
+  const exposure: SweepInput['modelVisible'] = new Map();
   const views: SweepInput['views'] = new Map();
   const embeddedSchemas: SweepInput['embeddedSchemas'] = new Map();
   const findings: Finding[] = [];
@@ -188,8 +188,11 @@ export function sweepInputFromExecRecords(
     source: meta.source,
     catalog: normalizeCatalog({ tools, prompts: [], resourceTemplates: [] }),
     orderedTools: tools,
-    exposureLabel: EXPOSURE_LABEL,
-    exposure,
+    modelVisibleLabel: EXPOSURE_LABEL,
+    wireLabel: EXPOSURE_LABEL,
+    modelVisible: exposure,
+    modelVisibleFromAdapter: true,
+    wire: exposure,
     views,
     embeddedSchemas,
     wrapperTools: meta.wrapperTools ?? null,

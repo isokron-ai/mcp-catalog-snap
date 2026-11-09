@@ -19,7 +19,8 @@ import { SNAPSHOT_FORMAT, SnapshotIntegrityError, normalizeCatalog, parseSnapsho
 import type { SourceInfo, SweepInput } from './types.js';
 
 export const TOOLS_LIST_ADAPTER = 'tools-list';
-const EXPOSURE_LABEL = 'canonical JSON (RFC 8785) of each tools/list entry';
+const WIRE_LABEL = 'canonical JSON (RFC 8785) of each whole tools/list entry, icons and _meta included';
+const MODEL_VISIBLE_LABEL = 'canonical JSON (RFC 8785) of the fields clients pass to the model';
 
 /**
  * A path segment that looks like a credential (some servers put API keys
@@ -59,8 +60,19 @@ function asObject(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-function emptyInput(): Pick<SweepInput, 'exposure' | 'views' | 'embeddedSchemas' | 'wrapperTools' | 'findings' | 'notes'> {
-  return { exposure: new Map(), views: new Map(), embeddedSchemas: new Map(), wrapperTools: null, findings: [], notes: [] };
+function emptyInput(): Pick<SweepInput, 'modelVisibleLabel' | 'wireLabel' | 'modelVisible' | 'modelVisibleFromAdapter' | 'wire' | 'views' | 'embeddedSchemas' | 'wrapperTools' | 'findings' | 'notes'> {
+  return {
+    modelVisibleLabel: MODEL_VISIBLE_LABEL,
+    wireLabel: WIRE_LABEL,
+    modelVisible: new Map(),
+    modelVisibleFromAdapter: false,
+    wire: new Map(),
+    views: new Map(),
+    embeddedSchemas: new Map(),
+    wrapperTools: null,
+    findings: [],
+    notes: [],
+  };
 }
 
 /** Parse a saved catalog file. `fileName` names the source in the report (no directory). */
@@ -87,8 +99,7 @@ export function parseToolsListFile(text: string, fileName: string, nameOverride?
       source: { kind: 'file', name: basename(fileName), format: 'snapshot' },
       catalog: snap.catalog,
       orderedTools: null,
-      exposureLabel: EXPOSURE_LABEL,
-      ...emptyInput(),
+        ...emptyInput(),
       notes: ['input is a snapshot: tools are stored sorted, so the server-order (ADR-0005) fingerprint is unavailable'],
     };
   }
@@ -124,7 +135,6 @@ export function parseToolsListFile(text: string, fileName: string, nameOverride?
     source: { kind: 'file', name: basename(fileName), format },
     catalog: normalizeCatalog({ tools, prompts: arr('prompts'), resourceTemplates: arr('resourceTemplates') }),
     orderedTools: tools,
-    exposureLabel: EXPOSURE_LABEL,
     ...emptyInput(),
     notes,
   };
@@ -142,7 +152,6 @@ export async function sweepInputFromServer(target: Target, opts: CaptureOptions 
     source: sourceOf(target),
     catalog: normalizeCatalog(raw),
     orderedTools: raw.tools,
-    exposureLabel: EXPOSURE_LABEL,
     ...emptyInput(),
   };
 }

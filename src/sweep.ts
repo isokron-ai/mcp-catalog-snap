@@ -6,9 +6,17 @@
  * fixed key order. The same input yields byte-identical `serializeReport`
  * output.
  *
- * Every token figure is **catalog exposure**: each tool counted once, as if
- * the whole catalog were loaded. It is not session exposure (what one client
- * loaded) nor task exposure (what an agent pulled), and the report says so.
+ * Two measures per tool, never mixed:
+ *   - `wire`: what crosses the wire, the canonical JSON of the whole
+ *     tools/list entry (icons, `_meta`, `outputSchema` included).
+ *   - `modelVisible`: what the model reads, the canonical JSON of only the
+ *     fields clients pass to it (`name`, `description`, `inputSchema`;
+ *     `annotations` only with `modelVisibleAnnotations`).
+ * Budgets, histograms and rankings use `modelVisible`.
+ *
+ * Every figure is catalog-wide: each tool counted once, as if the whole
+ * catalog were loaded. It is not session exposure (what one client loaded)
+ * nor task exposure (what an agent pulled), and the report says so.
  */
 
 import type { SweepInput } from './adapters/types.js';
@@ -19,6 +27,7 @@ import {
   analyzeCallResult,
   analyzeTool,
   compareFindings,
+  iconFindings,
   oversizeFinding,
   summarizeFindings,
   type Finding,
@@ -27,6 +36,8 @@ import {
   type RuleSummary,
 } from './findings.js';
 import {
+  MODEL_VISIBLE_FIELDS,
+  MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS,
   TOOL_FIELDS,
   addMeasures,
   distribution,
@@ -45,7 +56,7 @@ import { VERSION } from './version.js';
 
 export const REPORT_FORMAT = 'mcp-catalog-snap/sweep/1';
 export const DEFAULT_ADVISORY_TOOL_TOKENS = 5_000;
-export const EXPOSURE_EDGES = [100, 500, 1_000, 2_000, 5_000, 10_000] as const;
+export const MODEL_VISIBLE_EDGES = [100, 500, 1_000, 2_000, 5_000, 10_000] as const;
 
 export interface SweepOptions {
   tokenizers: readonly Tokenizer[];
@@ -56,6 +67,8 @@ export interface SweepOptions {
   /** Per-tool size that earns an advisory `oversize-tool` finding when no explicit budget is set. */
   advisoryToolTokens?: number;
   findings?: Omit<FindingsOptions, 'tokenizer'>;
+  /** Count `annotations` as model-visible (default false: they are client hints, not prompt text). */
+  modelVisibleAnnotations?: boolean;
   /** Provider counts gathered beforehand, or why they were skipped. */
   anthropic?: AnthropicCounts | { skipped: string };
   /** Observed tools/call results, for structuredContent duplication. */
@@ -67,7 +80,10 @@ export interface ToolReport {
   fingerprint: string;
   descriptionFingerprint: string;
   entryFingerprint: string;
-  exposure: Measure;
+  /** Canonical JSON of the whole tools/list entry. */
+  wire: Measure;
+  /** Canonical JSON of the model-visible fields; budgets apply to this. */
+  modelVisible: Measure;
   fields: Partial<Record<ToolField, Measure>>;
   views: Record<string, Measure>;
   anthropicTokens: number | null;
@@ -87,7 +103,11 @@ export interface SweepReport {
   source: SweepInput['source'];
   measurement: {
     scope: string;
-    exposure: string;
+    wire: string;
+    modelVisible: string;
+    /** Fields counted as model-visible; null when the adapter supplies the model-visible text (exec). */
+    modelVisibleFields: string[] | null;
+    budgetsApplyTo: 'modelVisible';
     tokenizers: { id: string; label: string }[];
     budgetTokenizer: string;
   };
@@ -96,14 +116,16 @@ export interface SweepReport {
     tools: number;
     prompts: number;
     resourceTemplates: number;
-    exposure: Measure;
-    exposurePerTool: Distribution;
+    wire: Measure;
+    modelVisible: Measure;
+    /** Model-visible tokens per tool, in the budget tokenizer. */
+    modelVisiblePerTool: Distribution;
     fields: Partial<Record<ToolField, Measure>>;
     views: Record<string, Measure>;
     embeddedSchema: { tools: number; escaped: Measure; plain: Measure } | null;
-    wrapper: { tools: string[]; exposure: Measure } | null;
+    wrapper: { tools: string[]; wire: Measure } | null;
   };
-  histograms: { exposureTokens: Record<string, number>; choiceListSizes: Record<string, number> };
+  histograms: { modelVisibleTokens: Record<string, number>; choiceListSizes: Record<string, number> };
   budget: {
     tokenizer: string;
     toolTokens: number | null;
@@ -121,7 +143,7 @@ export interface SweepReport {
 }
 
 const SCOPE =
-  'catalog exposure: every tool counted once, as if the full catalog were loaded. Not session exposure (what a client loaded) or task exposure (what an agent pulled).';
+  'catalog-wide: every tool counted once, as if the full catalog were loaded. Not session exposure (what a client loaded) or task exposure (what an agent pulled).';
 
 function hint(a: unknown, k: string): JsonValue {
   const v = isObj(a) ? a[k] : undefined;
@@ -146,7 +168,9 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
 
   const findings: Finding[] = [...input.findings];
   const tools: ToolReport[] = [];
-  let exposureTotal = emptyMeasure(toks);
+  let wireTotal = emptyMeasure(toks);
+  let visibleTotal = emptyMeasure(toks);
+  const withAnnotations = opts.modelVisibleAnnotations ?? false;
   const fieldTotals: Partial<Record<ToolField, Measure>> = {};
   const viewTotals: Record<string, Measure> = {};
   let escTotal = emptyMeasure(toks);
@@ -156,10 +180,13 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
   const toolsOver: string[] = [];
 
   for (const tool of input.catalog.tools) {
-    const m = measureTool(tool, toks);
-    const exposureText = input.exposure.get(tool.name);
-    const exposure = exposureText === undefined ? m.total : measure(exposureText, toks);
-    exposureTotal = addMeasures(exposureTotal, exposure);
+    const m = measureTool(tool, toks, { modelVisibleAnnotations: withAnnotations });
+    const wireText = input.wire.get(tool.name);
+    const visibleText = input.modelVisible.get(tool.name);
+    const wire = wireText === undefined ? m.total : measure(wireText, toks);
+    const modelVisible = visibleText === undefined ? m.modelVisible : visibleText === wireText ? wire : measure(visibleText, toks);
+    wireTotal = addMeasures(wireTotal, wire);
+    visibleTotal = addMeasures(visibleTotal, modelVisible);
     for (const f of TOOL_FIELDS) {
       const fm = m.fields[f];
       if (fm) fieldTotals[f] = addMeasures(fieldTotals[f] ?? emptyMeasure(toks), fm);
@@ -172,7 +199,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
 
     const a = analyzeTool(tool, { ...(opts.findings ?? {}), tokenizer: ref });
     findings.push(...a.findings);
-    const over = oversizeFinding(tool.name, exposure.tokens[budgetTok]!, perToolLimit, budgetTok);
+    const over = oversizeFinding(tool.name, modelVisible.tokens[budgetTok]!, perToolLimit, budgetTok);
     if (over) {
       findings.push(over);
       if (toolBudget !== undefined) toolsOver.push(tool.name);
@@ -192,8 +219,8 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
           severity: 'info',
           tool: tool.name,
           path: '',
-          message: `the exposure embeds the input schema as an escaped string: ${e.tokens[budgetTok]} vs ${p.tokens[budgetTok]} ${budgetTok} tokens as plain JSON (+${overhead})`,
-          data: { view: 'exposure', escapedBytes: e.bytes, plainBytes: p.bytes, escapedTokens: e.tokens[budgetTok]!, plainTokens: p.tokens[budgetTok]!, tokenizer: budgetTok },
+          message: `the model-visible text embeds the input schema as an escaped string: ${e.tokens[budgetTok]} vs ${p.tokens[budgetTok]} ${budgetTok} tokens as plain JSON (+${overhead})`,
+          data: { view: 'modelVisible', escapedBytes: e.bytes, plainBytes: p.bytes, escapedTokens: e.tokens[budgetTok]!, plainTokens: p.tokens[budgetTok]!, tokenizer: budgetTok },
         });
       }
     }
@@ -206,7 +233,8 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       fingerprint: m.fingerprint,
       descriptionFingerprint: m.descriptionFingerprint,
       entryFingerprint: m.entryFingerprint,
-      exposure,
+      wire,
+      modelVisible,
       fields: m.fields,
       views,
       anthropicTokens: anthropicPerTool && Object.hasOwn(anthropicPerTool, tool.name) ? anthropicPerTool[tool.name]! : null,
@@ -223,12 +251,14 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
     });
   }
 
+  findings.push(...iconFindings(input.catalog.tools, opts.findings?.maxIconBytes));
+
   for (const c of opts.callResults ?? []) {
     const f = analyzeCallResult(c.tool, c.result, ref);
     if (f) findings.push(f);
   }
 
-  const catalogTokens = exposureTotal.tokens[budgetTok]!;
+  const catalogTokens = visibleTotal.tokens[budgetTok]!;
   const limitCatalog = catalogBudget !== undefined && catalogTokens > catalogBudget;
   if (limitCatalog) {
     findings.push({
@@ -236,7 +266,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       severity: 'error',
       tool: null,
       path: '',
-      message: `catalog exposure is ${catalogTokens} ${budgetTok} tokens, over the ${catalogBudget}-token catalog budget`,
+      message: `catalog model-visible size is ${catalogTokens} ${budgetTok} tokens, over the ${catalogBudget}-token catalog budget`,
       data: { tokens: catalogTokens, budget: catalogBudget, tokenizer: budgetTok },
     });
   }
@@ -251,7 +281,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
   if (input.wrapperTools) {
     let w = emptyMeasure(toks);
     for (const t of input.wrapperTools) w = addMeasures(w, measure(canonicalJson(t), toks));
-    wrapper = { tools: input.wrapperTools.map((t) => t.name), exposure: w };
+    wrapper = { tools: input.wrapperTools.map((t) => t.name), wire: w };
   }
 
   const notes = [...input.notes];
@@ -277,7 +307,10 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
     source: input.source,
     measurement: {
       scope: SCOPE,
-      exposure: input.exposureLabel,
+      wire: input.wireLabel,
+      modelVisible: input.modelVisibleFromAdapter ? input.modelVisibleLabel : `${input.modelVisibleLabel}: ${(withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS).join(', ')}`,
+      modelVisibleFields: input.modelVisibleFromAdapter ? null : [...(withAnnotations ? MODEL_VISIBLE_FIELDS_WITH_ANNOTATIONS : MODEL_VISIBLE_FIELDS)],
+      budgetsApplyTo: 'modelVisible',
       tokenizers: toks.map((t) => ({ id: t.id, label: t.label })),
       budgetTokenizer: budgetTok,
     },
@@ -289,15 +322,16 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
       tools: input.catalog.tools.length,
       prompts: input.catalog.prompts.length,
       resourceTemplates: input.catalog.resourceTemplates.length,
-      exposure: exposureTotal,
-      exposurePerTool: distribution(tools.map((t) => t.exposure.tokens[budgetTok]!)),
+      wire: wireTotal,
+      modelVisible: visibleTotal,
+      modelVisiblePerTool: distribution(tools.map((t) => t.modelVisible.tokens[budgetTok]!)),
       fields: Object.fromEntries(TOOL_FIELDS.filter((f) => fieldTotals[f]).map((f) => [f, fieldTotals[f]!])),
       views: Object.fromEntries(Object.keys(viewTotals).sort().map((k) => [k, viewTotals[k]!])),
       embeddedSchema: embeddedCount > 0 ? { tools: embeddedCount, escaped: escTotal, plain: plainTotal } : null,
       wrapper,
     },
     histograms: {
-      exposureTokens: histogram(tools.map((t) => t.exposure.tokens[budgetTok]!), EXPOSURE_EDGES),
+      modelVisibleTokens: histogram(tools.map((t) => t.modelVisible.tokens[budgetTok]!), MODEL_VISIBLE_EDGES),
       choiceListSizes: histogram(choiceSizes, CHOICE_LIST_EDGES),
     },
     budget: {
