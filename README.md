@@ -535,6 +535,4 @@ See `CONTRIBUTING.md` (DCO sign-off, Apache-2.0).
 
 ---
 
-Part of [IsoKron](https://isokron.ai) — typed-graph substrate for AI agents.
-
 Built and maintained by [IsoKron](https://isokron.ai).
