@@ -6,16 +6,17 @@
 
 import { BOOLEAN, REPEATABLE, type ParsedArgs } from './args.js';
 
-const TARGET = ['url', 'header', 'bearer-file', 'bearer-env', 'env', 'cwd', 'timeout', 'timeout-total', 'name'];
+const TARGET = ['url', 'header', 'bearer-file', 'bearer-env', 'env', 'cwd', 'timeout', 'timeout-total', 'name', 'telemetry-env', 'no-telemetry-defaults'];
 const CONFIG = ['config', 'server', 'dir'];
 const ALWAYS = ['help', 'version'];
 /** Most positional arguments each command takes (hash: one snapshot file; diff: two). */
-const MAX_POSITIONALS: Readonly<Record<string, number>> = { snapshot: 0, check: 0, sweep: 0, hash: 1, diff: 2 };
+const MAX_POSITIONALS: Readonly<Record<string, number>> = { snapshot: 0, check: 0, sweep: 0, matrix: 0, hash: 1, diff: 2 };
 
 export const COMMAND_OPTIONS: Readonly<Record<string, readonly string[]>> = {
   snapshot: [...TARGET, ...CONFIG, 'label', 'no-write', 'quiet'],
   check: [...TARGET, ...CONFIG, 'label', 'ignore-descriptions', 'allow-additions', 'allow-write-additions', 'update', 'json', 'report', 'quiet'],
   diff: ['ignore-descriptions', 'allow-additions', 'allow-write-additions', 'json'],
+  matrix: [...TARGET, ...CONFIG, 'label', 'flag-sets', 'no-write', 'json', 'quiet'],
   hash: [...TARGET, ...CONFIG],
   sweep: [
     ...TARGET,

@@ -54,7 +54,7 @@ export interface RenderOptions {
 }
 
 /** The prominent lines: added tools that can write, and tools whose annotations got less safe. */
-export function safetyLines(diff: CatalogDiff): string[] {
+export function safetyLines(diff: Pick<CatalogDiff, 'safety'>): string[] {
   const out: string[] = [];
   const s = diff.safety;
   if (!s) return out;
@@ -113,15 +113,37 @@ export function renderDiff(diff: CatalogDiff, verdict: Verdict, opts: RenderOpti
   return lines.join('\n');
 }
 
+/**
+ * The summary `snapshot` prints. The launch line names the command and
+ * counts its arguments without showing them (CI logs are widely readable;
+ * the masked arguments are in the file).
+ */
 export function renderSnapshotHeader(snap: Snapshot): string {
   const c = snap.catalog;
-  return [
+  const hs = snap.handshake;
+  const requested = hs?.requestedProtocolVersion;
+  const lines = [
     `server:          ${visible(snap.server.name)} ${visible(snap.server.version)}`,
-    `protocolVersion: ${visible(snap.protocolVersion ?? '(unknown)')}`,
+    `protocolVersion: ${visible(snap.protocolVersion ?? '(unknown)')}${requested ? ` (requested ${visible(requested)})` : ''}`,
+  ];
+  if (hs) lines.push(`client caps:     ${visible(JSON.stringify(hs.clientCapabilities))}`);
+  const l = snap.launch;
+  if (l?.transport === 'stdio') {
+    const base = l.command.split(/[\\/]/).pop() ?? '';
+    const env = Object.keys(l.env);
+    lines.push(`launch:          stdio ${visible(base)} with ${l.args.length} argument(s)${env.length > 0 ? `, env ${env.map(visible).join(', ')}` : ''}`);
+    const tele = Object.keys(l.telemetryEnv);
+    lines.push(`telemetry off:   ${tele.length > 0 ? tele.map(visible).join(', ') : '(none set)'}`);
+  } else if (l?.transport === 'http') {
+    lines.push(`launch:          http ${visible(l.url)}${l.headers.length > 0 ? `, headers ${l.headers.map(visible).join(', ')}` : ''}`);
+  }
+  if (snap.flagSet) lines.push(`flag set:        ${visible(snap.flagSet)}`);
+  lines.push(
     `captured:        ${snap.capturedAt} by ${snap.capturedWith}`,
     `catalog:         ${c.tools.length} tools, ${c.prompts.length} prompts, ${c.resourceTemplates.length} resource templates`,
     `sha256:          ${snap.sha256}`,
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 /** Machine-readable result for one server, used by `--json`. */

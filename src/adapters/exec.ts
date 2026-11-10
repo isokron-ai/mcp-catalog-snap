@@ -142,7 +142,7 @@ function countUnknownTypes(v: unknown): number {
 /** Build the sweep input from exec records (offline or freshly fetched). */
 export function sweepInputFromExecRecords(
   records: readonly ExecRecord[],
-  meta: Pick<SweepInput, 'server' | 'protocolVersion' | 'source'> & { adapter: string; wrapperTools?: CatalogTool[] | null; marker?: string; notes?: string[] },
+  meta: Pick<SweepInput, 'server' | 'protocolVersion' | 'source' | 'handshake'> & { adapter: string; wrapperTools?: CatalogTool[] | null; marker?: string; notes?: string[] },
 ): SweepInput {
   const marker = meta.marker ?? POSTHOG_EXEC.infoSchemaMarker!;
   const exposure: SweepInput['modelVisible'] = new Map();
@@ -186,6 +186,7 @@ export function sweepInputFromExecRecords(
     adapter: meta.adapter,
     server: meta.server,
     protocolVersion: meta.protocolVersion,
+    handshake: meta.handshake ?? null,
     source: meta.source,
     catalog: normalizeCatalog({ tools, prompts: [], resourceTemplates: [] }),
     orderedTools: tools,
@@ -339,6 +340,7 @@ export async function sweepInputFromExecSession(
     adapter: p.id,
     server,
     protocolVersion: session.protocolVersion(),
+    handshake: session.handshake(),
     source,
     wrapperTools: wrapper,
     notes,

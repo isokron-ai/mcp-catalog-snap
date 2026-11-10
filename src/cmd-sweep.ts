@@ -14,6 +14,7 @@ import { basename } from 'node:path';
 import { loadSweepInput, type LoadOptions } from './adapters/index.js';
 import { ANTHROPIC_API_KEY_ENV, DEFAULT_ANTHROPIC_MODEL, anthropicToolCounts } from './anthropic.js';
 import type { Target } from './capture.js';
+import type { TelemetryOptions } from './launch.js';
 import { EXIT_ERROR, EXIT_OK, EXIT_TAMPERED } from './commands.js';
 import { redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
 import { readInputText } from './read-input.js';
@@ -32,6 +33,8 @@ export interface SweepCommandOptions {
   name?: string;
   timeoutMs?: number;
   totalTimeoutMs?: number;
+  /** Telemetry-off environment for a launched stdio server. */
+  telemetry?: TelemetryOptions;
   tokenizers?: string[];
   budgetTokenizer?: string;
   maxToolTokens?: number;
@@ -96,6 +99,7 @@ export async function cmdSweep(opts: SweepCommandOptions, rawIo: IO): Promise<nu
     if (opts.name !== undefined) load.name = opts.name;
     if (opts.timeoutMs !== undefined) load.timeoutMs = opts.timeoutMs;
     if (opts.totalTimeoutMs !== undefined) load.totalTimeoutMs = opts.totalTimeoutMs;
+    if (opts.telemetry !== undefined) load.telemetry = opts.telemetry;
     if (opts.saveRaw !== undefined) {
       load.saveRaw = opts.saveRaw;
       load.secrets = secrets;

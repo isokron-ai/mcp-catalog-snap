@@ -3,11 +3,16 @@
  *
  * ```json
  * {
- *   "format": "mcp-catalog-snap/1",
+ *   "format": "mcp-catalog-snap/2",
  *   "server": { "name": "kronicle-lite", "version": "0.2.0" },
  *   "protocolVersion": "2025-11-25",
+ *   "handshake": { "requestedProtocolVersion": "2025-11-25", "negotiatedProtocolVersion": "2025-11-25",
+ *                  "clientCapabilities": {}, "clientInfo": { "name": "mcp-catalog-snap", "version": "0.3.0" } },
+ *   "launch": { "transport": "stdio", "command": "npx", "args": ["-y", "kronicle-lite@0.2.0", "serve"],
+ *               "env": {}, "telemetryEnv": { "DO_NOT_TRACK": "1", ... } },
+ *   "flagSet": null,
  *   "capturedAt": "2026-10-31T23:00:00.000Z",
- *   "capturedWith": "mcp-catalog-snap/0.2.0",
+ *   "capturedWith": "mcp-catalog-snap/0.3.0",
  *   "sha256": "<sha256 of canonicalJson(catalog)>",
  *   "catalog": {
  *     "tools": [ ...sorted by name, every field tools/list returned... ],
@@ -17,17 +22,35 @@
  * }
  * ```
  *
- * Only `catalog` is hashed. Server version, capture time and the tool
- * version live in the header so a server release that does not touch its
- * catalog does not read as drift.
+ * Only `catalog` is hashed. Server version, handshake, launch, flag set,
+ * capture time and the tool version live in the header so a server release
+ * that does not touch its catalog does not read as drift, and two captures
+ * of the same catalog have the same `sha256` whenever they were taken.
+ *
+ * Format 1 (0.1 / 0.2) had no `handshake`, `launch` or `flagSet`; it is still
+ * read (those fields are then absent) and its catalog and `sha256` mean the
+ * same as in format 2.
  */
 
+import type { Handshake } from './capture.js';
 import { fingerprint, prettyCanonical, sortKeysDeep, type JsonValue } from './canonical.js';
+import type { LaunchRecord } from './launch.js';
 import { MAX_INPUT_BYTES } from './read-input.js';
 import { jsonSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
-export const SNAPSHOT_FORMAT = 'mcp-catalog-snap/1';
+/** The format this version writes. */
+export const SNAPSHOT_FORMAT = 'mcp-catalog-snap/2';
+/** The 0.1 / 0.2 format: no handshake, launch or flag set. Still read. */
+export const SNAPSHOT_FORMAT_V1 = 'mcp-catalog-snap/1';
+export type SnapshotFormat = typeof SNAPSHOT_FORMAT | typeof SNAPSHOT_FORMAT_V1;
+/** Every format `parseSnapshot` reads. */
+export const SNAPSHOT_FORMATS: readonly SnapshotFormat[] = [SNAPSHOT_FORMAT, SNAPSHOT_FORMAT_V1];
+
+/** True for a `format` value `parseSnapshot` reads. */
+export function isSnapshotFormat(v: unknown): v is SnapshotFormat {
+  return (SNAPSHOT_FORMATS as readonly unknown[]).includes(v);
+}
 
 export interface CatalogTool {
   name: string;
@@ -70,9 +93,16 @@ export interface ServerInfo {
 }
 
 export interface Snapshot {
-  format: typeof SNAPSHOT_FORMAT;
+  format: SnapshotFormat;
   server: ServerInfo;
+  /** Negotiated protocol version (same as `handshake.negotiatedProtocolVersion`; kept for format-1 readers). */
   protocolVersion: string | null;
+  /** Format 2: the initialize handshake (requested and negotiated version, client capabilities and info); null when not observed. Absent in format 1. */
+  handshake?: Handshake | null;
+  /** Format 2: how the server was launched or dialed (credentials masked); null for a caller-supplied transport. Absent in format 1. */
+  launch?: LaunchRecord | null;
+  /** Format 2: the flag-matrix set this capture belongs to; null outside `matrix`. Absent in format 1. */
+  flagSet?: string | null;
   capturedAt: string;
   capturedWith: string;
   sha256: string;
@@ -83,6 +113,10 @@ export interface Snapshot {
 export interface RawCapture {
   server: ServerInfo;
   protocolVersion: string | null;
+  /** The initialize handshake, when the capture observed it. */
+  handshake?: Handshake;
+  /** How the server was launched (`capture` sets it; a caller-supplied transport has none). */
+  launch?: LaunchRecord;
   tools: unknown[];
   prompts: unknown[];
   resourceTemplates: unknown[];
@@ -150,6 +184,8 @@ function findDuplicates(names: string[]): string[] {
 export interface BuildOptions {
   /** Override capture time (tests). Defaults to now. */
   capturedAt?: string;
+  /** Flag-matrix set name recorded in the header (default null). */
+  flagSet?: string;
 }
 
 export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapshot {
@@ -160,6 +196,9 @@ export function buildSnapshot(raw: RawCapture, opts: BuildOptions = {}): Snapsho
     format: SNAPSHOT_FORMAT,
     server,
     protocolVersion: raw.protocolVersion,
+    handshake: raw.handshake ?? null,
+    launch: raw.launch ?? null,
+    flagSet: opts.flagSet ?? null,
     capturedAt: opts.capturedAt ?? new Date().toISOString(),
     capturedWith: `mcp-catalog-snap/${VERSION}`,
     sha256: fingerprint(catalog),
@@ -221,8 +260,9 @@ export function parseSnapshot(text: string, source = 'snapshot'): Snapshot {
     throw new Error(`${source}: expected a JSON object`);
   }
   const o = parsed as Record<string, unknown>;
-  if (o['format'] !== SNAPSHOT_FORMAT) {
-    throw new Error(`${source}: unsupported format ${JSON.stringify(o['format'])} (expected ${SNAPSHOT_FORMAT})`);
+  const format = o['format'];
+  if (!isSnapshotFormat(format)) {
+    throw new Error(`${source}: unsupported format ${JSON.stringify(format)} (expected ${SNAPSHOT_FORMATS.join(' or ')})`);
   }
   const server = o['server'];
   if (server === null || typeof server !== 'object') {
@@ -248,8 +288,8 @@ export function parseSnapshot(text: string, source = 'snapshot'): Snapshot {
   const s = server as Record<string, unknown>;
   const info: ServerInfo = { name: String(s['name'] ?? ''), version: String(s['version'] ?? '') };
   if (typeof s['title'] === 'string') info.title = s['title'];
-  return {
-    format: SNAPSHOT_FORMAT,
+  const snap: Snapshot = {
+    format,
     server: info,
     protocolVersion: typeof o['protocolVersion'] === 'string' ? o['protocolVersion'] : null,
     capturedAt: String(o['capturedAt'] ?? ''),
@@ -257,6 +297,21 @@ export function parseSnapshot(text: string, source = 'snapshot'): Snapshot {
     sha256: o['sha256'],
     catalog: normalized,
   };
+  if (format !== SNAPSHOT_FORMAT_V1) {
+    snap.handshake = headerObject(o['handshake'], 'handshake', source) as Handshake | null;
+    snap.launch = headerObject(o['launch'], 'launch', source) as LaunchRecord | null;
+    const fs = o['flagSet'];
+    if (fs !== undefined && fs !== null && typeof fs !== 'string') throw new Error(`${source}: "flagSet" must be a string or null`);
+    snap.flagSet = fs ?? null;
+  }
+  return snap;
+}
+
+/** A format-2 header object (`handshake`, `launch`): an object, or null when absent. Kept as recorded (key-sorted). */
+function headerObject(v: unknown, key: string, source: string): JsonValue {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error(`${source}: "${key}" must be an object or null`);
+  return sortKeysDeep(v);
 }
 
 /** A snapshot whose stored sha256 does not match its catalog body. */

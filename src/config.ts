@@ -17,12 +17,19 @@
  * environment at load time (missing variables are an error, so a CI job
  * with a forgotten secret fails loudly instead of sending a literal).
  * Relative `snapshotDir` / `cwd` resolve against the config file's directory.
+ *
+ * Optional, top level: `"telemetryEnv": {"KEY": "value"}` adds telemetry-off
+ * variables for every stdio server, and `"telemetryDefaults": false` drops
+ * the built-in set. Per server: `"flagSets": [...]` for `matrix` (see
+ * matrix.ts).
  */
 
 import { readInputText } from './read-input.js';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import type { Target } from './capture.js';
+import type { TelemetryOptions } from './launch.js';
+import { parseFlagSets, type FlagSet } from './matrix.js';
 
 export const DEFAULT_CONFIG_FILE = '.mcp-catalog.json';
 export const DEFAULT_SNAPSHOT_DIR = '.mcp-catalog';
@@ -32,6 +39,8 @@ export interface ServerSpec {
   target: Target;
   /** Display label for messages and reports (ad-hoc `--label`); default: `name`, else `describeTarget`. */
   label?: string;
+  /** Flag sets `matrix` captures this server under. */
+  flagSets?: FlagSet[];
 }
 
 export interface CatalogConfig {
@@ -40,6 +49,8 @@ export interface CatalogConfig {
   /** Absolute snapshot directory. */
   snapshotDir: string;
   servers: ServerSpec[];
+  /** Telemetry-off environment for stdio servers (`telemetryEnv`, `telemetryDefaults`). */
+  telemetry: TelemetryOptions;
 }
 
 export function expandEnv(s: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -74,6 +85,18 @@ export function parseConfig(text: string, configPath: string, env: NodeJS.Proces
   const snapshotDirRaw = o['snapshotDir'] ?? DEFAULT_SNAPSHOT_DIR;
   if (typeof snapshotDirRaw !== 'string') throw new Error(`${configPath}: snapshotDir must be a string`);
   const snapshotDir = isAbsolute(snapshotDirRaw) ? snapshotDirRaw : resolve(baseDir, snapshotDirRaw);
+
+  const telemetry: TelemetryOptions = {};
+  if (o['telemetryDefaults'] !== undefined) {
+    if (typeof o['telemetryDefaults'] !== 'boolean') throw new Error(`${configPath}: telemetryDefaults must be true or false`);
+    telemetry.defaults = o['telemetryDefaults'];
+  }
+  if (o['telemetryEnv'] !== undefined) {
+    if (o['telemetryEnv'] === null || typeof o['telemetryEnv'] !== 'object' || Array.isArray(o['telemetryEnv'])) {
+      throw new Error(`${configPath}: telemetryEnv must be an object`);
+    }
+    telemetry.extra = expandRecord(o['telemetryEnv'] as Record<string, unknown>, `${configPath}: telemetryEnv`, env);
+  }
 
   if (!Array.isArray(o['servers'])) throw new Error(`${configPath}: "servers" must be an array`);
   const servers: ServerSpec[] = [];
@@ -116,7 +139,7 @@ export function parseConfig(text: string, configPath: string, env: NodeJS.Proces
         const cwd = expandEnv(e['cwd'], env);
         target.cwd = isAbsolute(cwd) ? cwd : resolve(baseDir, cwd);
       }
-      servers.push({ name, target });
+      servers.push(withFlagSets({ name, target }, e, where, env));
     } else {
       if (typeof e['url'] !== 'string') throw new Error(`${where}.url must be a string`);
       const target: Target = { kind: 'http', url: expandEnv(e['url'], env) };
@@ -124,10 +147,15 @@ export function parseConfig(text: string, configPath: string, env: NodeJS.Proces
         if (e['headers'] === null || typeof e['headers'] !== 'object') throw new Error(`${where}.headers must be an object`);
         target.headers = expandRecord(e['headers'] as Record<string, unknown>, `${where}.headers`, env);
       }
-      servers.push({ name, target });
+      servers.push(withFlagSets({ name, target }, e, where, env));
     }
   });
-  return { path: resolve(configPath), snapshotDir, servers };
+  return { path: resolve(configPath), snapshotDir, servers, telemetry };
+}
+
+function withFlagSets(spec: ServerSpec, e: Record<string, unknown>, where: string, env: NodeJS.ProcessEnv): ServerSpec {
+  if (e['flagSets'] !== undefined) spec.flagSets = parseFlagSets(e['flagSets'], `${where}.flagSets`, env);
+  return spec;
 }
 
 export function loadConfig(configPath: string, env: NodeJS.ProcessEnv = process.env): CatalogConfig {
