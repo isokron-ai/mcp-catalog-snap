@@ -6,14 +6,15 @@
  *   mcp-catalog-snap check    [--server N] [--ignore-descriptions] [--allow-additions] [--json]
  *   mcp-catalog-snap diff     A.json B.json [--ignore-descriptions] [--allow-additions] [--json]
  *   mcp-catalog-snap hash     [FILE | --url U | -- cmd args...]
+ *   mcp-catalog-snap matrix   --flag-sets FILE [-- cmd args... | --url U | --server N]
  *   mcp-catalog-snap sweep    [--from FILE | --url U | -- cmd args...] [--adapter A] [--json] ...
  */
 
-import { bool, parseArgs, str, targetFromArgs, type ParsedArgs } from './args.js';
+import { bool, parseArgs, str, targetFromArgs, telemetryFromArgs, type ParsedArgs } from './args.js';
 import { redact, redactingIO, targetSecrets } from './redact.js';
 import { validateFlags } from './cli-flags.js';
 import { cmdSweep, type SweepCommandOptions } from './cmd-sweep.js';
-import { cmdCheck, cmdDiff, cmdHash, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
+import { cmdCheck, cmdDiff, cmdHash, cmdMatrix, cmdSnapshot, EXIT_ERROR, EXIT_OK, type IO } from './commands.js';
 import { oneLine, terminalSafe } from './safe-text.js';
 import { VERSION } from './version.js';
 
@@ -27,6 +28,8 @@ Usage:
   mcp-catalog-snap check    [options]                           re-capture + diff against the snapshot(s)
   mcp-catalog-snap diff     A.json B.json [--json]              diff two snapshot files
   mcp-catalog-snap hash     [FILE | --url URL | -- <command>]   print the catalog fingerprint (sha256)
+  mcp-catalog-snap matrix   --flag-sets FILE [-- <command> | --url URL | --server NAME]
+                                                                one snapshot per flag set + what differs between sets
   mcp-catalog-snap sweep    [--from FILE | --url URL | -- <command>] [options]   static sweep report
 
 Target options (snapshot / check / hash):
@@ -45,6 +48,9 @@ Target options (snapshot / check / hash):
   --dir DIR             snapshot directory (default .mcp-catalog, or snapshotDir from config)
   --timeout MS          per-request timeout (default 30000)
   --timeout-total MS    deadline for each server's whole capture (default: none)
+  --telemetry-env K=V   (stdio) also set this telemetry-off variable (repeatable); DO_NOT_TRACK=1,
+                        OTEL_SDK_DISABLED=true and other common opt-outs are always set
+  --no-telemetry-defaults  (stdio) do not set the built-in telemetry-off variables
 
 check / diff options:
   --ignore-descriptions do not treat description-only changes as drift
@@ -59,6 +65,12 @@ check / diff options:
 snapshot options:
   --no-write            print the snapshot to stdout instead of writing it
   --quiet               no summary on success
+
+matrix options:
+  --flag-sets FILE      JSON array of {"name", "args"?, "env"?, "headers"?}; args are appended to the
+                        server command (default: the configured server's "flagSets")
+  --no-write            print only; otherwise writes <dir>/<server>.matrix/<set>.json + _matrix.json
+  --json                print the matrix report as JSON
 
 sweep options:
   --from FILE           offline input: tools/list result, JSON-RPC response, tools array,
@@ -180,6 +192,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
   try {
     validateFlags(args);
     const target = targetFromArgs(args);
+    const telemetry = telemetryFromArgs(args);
     secrets = targetSecrets(target);
     io = redactingIO(rawIo, secrets);
     const common = {
@@ -191,6 +204,7 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
       ...optional('dir', str(args.flags['dir'])),
       ...optional('timeoutMs', timeoutMs(args)),
       ...optional('totalTimeoutMs', timeoutMs(args, 'timeout-total')),
+      ...optional('telemetry', telemetry),
       quiet: bool(args.flags['quiet']),
     };
     switch (args.cmd) {
@@ -209,12 +223,19 @@ export async function main(argv: string[], rawIo: IO): Promise<number> {
         }
         return cmdDiff(a, b, policy(args), io);
       }
+      case 'matrix': {
+        if (args.flags['flag-sets'] === true) throw new Error('--flag-sets needs a file');
+        return await cmdMatrix(
+          { ...common, json: bool(args.flags['json']), noWrite: bool(args.flags['no-write']), ...optional('flagSetsFile', str(args.flags['flag-sets'])) },
+          io,
+        );
+      }
       case 'sweep':
         if (args.positional.length > 0) {
           io.err(`error: unexpected argument ${JSON.stringify(args.positional[0])} (offline input goes in --from FILE)`);
           return EXIT_ERROR;
         }
-        return await cmdSweep(sweepOptions(args, target), io);
+        return await cmdSweep({ ...sweepOptions(args, target), ...optional('telemetry', telemetry) }, io);
       case 'hash': {
         const file = args.positional[0];
         if (file !== undefined && target !== undefined) throw new Error('give a snapshot FILE or a live target (--url or -- command), not both');

@@ -69,6 +69,11 @@ export function credentialName(name: string): boolean {
     .some((w) => CREDENTIAL_NAME_WORD.test(w));
 }
 
+/** An environment variable name (stdio child) whose value is treated as a credential. */
+export function credentialEnvName(name: string): boolean {
+  return CREDENTIAL_ENV.test(name) || credentialName(name);
+}
+
 /** Single-letter flags that commonly take a token or password (`-t`, `-k`, `-p`): masked for display only (too ambiguous to refuse catalogs over). */
 const SHORT_SECRET_FLAG = /^-[tkp]$/;
 const HEADER_FLAG = /^(-H|--header)$/;
@@ -84,7 +89,7 @@ const AUTHORIZATION = /\b((?:proxy-)?authorization)\s*[:=][\s\S]*/gi;
 const BEARER = /\b(bearer|basic)\s+\S+/gi;
 
 /** One argument's text with every embedded credential masked (URL userinfo, credential NAME=VALUE pairs, Authorization / Bearer values, credential-looking values, query values). */
-function maskText(a: string): string {
+export function maskArg(a: string): string {
   if (looksSecret(a)) return REDACTED;
   const whole = NAME_EQ.exec(a);
   if (whole && credentialName(whole[1]!)) return `${whole[1]}=${REDACTED}`;
@@ -124,7 +129,7 @@ export function maskedArgs(args: readonly string[]): string[] {
     if (eq) {
       const flag = eq[1]!;
       if (HEADER_FLAG.test(flag)) out.push(`${flag}=${maskHeader(eq[2]!)}`);
-      else out.push(credentialName(flag) || SHORT_SECRET_FLAG.test(flag) ? `${flag}=${REDACTED}` : `${flag}=${maskText(eq[2]!)}`);
+      else out.push(credentialName(flag) || SHORT_SECRET_FLAG.test(flag) ? `${flag}=${REDACTED}` : `${flag}=${maskArg(eq[2]!)}`);
     } else if (FLAG.test(a) && next !== undefined && HEADER_FLAG.test(a)) {
       out.push(a, maskHeader(next));
       i++;
@@ -135,7 +140,7 @@ export function maskedArgs(args: readonly string[]): string[] {
       // attached short value: -tTOKEN, -pPASSWORD, -HAuthorization:…
       out.push(`${a.slice(0, 2)}${REDACTED}`);
     } else {
-      out.push(maskText(a));
+      out.push(maskArg(a));
     }
   }
   return out;
@@ -218,7 +223,7 @@ export function targetSecrets(t: Target | undefined): string[] {
     }
     out.push(...urlSecrets(t.url));
   } else if (t?.kind === 'stdio') {
-    for (const [k, v] of Object.entries(t.env ?? {})) if (CREDENTIAL_ENV.test(k) || credentialName(k)) out.push(v);
+    for (const [k, v] of Object.entries(t.env ?? {})) if (credentialEnvName(k)) out.push(v);
     out.push(...argSecrets(t.args));
   }
   return normalizeSecrets(out);

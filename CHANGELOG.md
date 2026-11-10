@@ -6,6 +6,75 @@ uses semantic versioning once past 0.x.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-10
+
+Snapshots fit for an audit evidence trail: they say how they were taken,
+and a flag matrix shows what each server flag changes.
+
+### Added
+
+- **Snapshot format 2** (`mcp-catalog-snap/2`) with three header fields,
+  none of them hashed:
+  - `handshake` (audit K-7, PS-K8): the initialize request as sent
+    (`requestedProtocolVersion`, `clientCapabilities`, `clientInfo`) and
+    the server's `negotiatedProtocolVersion`. 0.2 kept only the negotiated
+    version, yet servers gate tools on the *requested* version and on
+    client capabilities. The sweep report gains the same `handshake` field
+    (additive; `sweep/1` unchanged) and its markdown shows the requested
+    version and capabilities.
+  - `launch` (K-G13): stdio `command`, `args`, the caller's `env`
+    overrides and `telemetryEnv`; HTTP `url` (origin + path) and header
+    names. Credentials are masked with the existing argument rules, plus
+    every credential the target is known to carry. `snapshot` prints the
+    command basename and the argument count, not the arguments.
+  - `flagSet`: the matrix set a snapshot belongs to, else `null`.
+- **`matrix` command** (K-G7): `--flag-sets FILE` (or a configured
+  server's `"flagSets"`) lists `{name, args?, env?, headers?}` sets; each
+  is captured in turn in one run and written to
+  `<dir>/<server>.matrix/<set>.json`, plus `_matrix.json`
+  (`mcp-catalog-snap/matrix/1`, no timestamps): per tool, prompt and
+  template, the sets it appears in, its definitions grouped into variants
+  A, B, … with annotations and safety class, the JSON paths that differ
+  between variants, and every set against the first (added, removed,
+  changed, `SAFETY`). A read-only tool and a write tool registered under
+  one name in different modes now show up as two variants. Exit 2 when a
+  set fails; the others are still written.
+- **Telemetry off for launched servers** (K-G6): every stdio server gets
+  `DO_NOT_TRACK=1`, `OTEL_SDK_DISABLED=true`, `CHECKPOINT_DISABLE=1`,
+  `HF_HUB_DISABLE_TELEMETRY=1`, `DOTNET_CLI_TELEMETRY_OPTOUT=1`,
+  `NEXT_TELEMETRY_DISABLED=1`, `SCARF_ANALYTICS=false` and
+  `ANONYMIZED_TELEMETRY=false`, over the inherited environment (the
+  server's own `env` still wins). `--telemetry-env KEY=VALUE` and config
+  `"telemetryEnv"` add more; `--no-telemetry-defaults` and
+  `"telemetryDefaults": false` drop the built-ins. The snapshot records
+  what the child received under `launch.telemetryEnv`.
+
+### Changed
+
+- New snapshots are format 2. Format 1 files are still read by every
+  command (byte-for-byte round trip; the committed `examples/` stay format
+  1 and keep checking), their `sha256` means the same, and
+  `check --update` rewrites a format-1 baseline as format 2.
+- API: the `Snapshot` type gains the optional format-2 fields,
+  `RawCapture` gains `handshake` and `launch`, `Session` gains
+  `handshake()`, and `SNAPSHOT_FORMATS`, `SNAPSHOT_FORMAT_V1`,
+  `isSnapshotFormat`, the `launch` helpers and the `matrix` builders are
+  exported.
+
+### Documentation
+
+- How to reproduce the fingerprint (PS-K8): exactly what is hashed (the
+  whole `catalog` object, not the tools array; RFC 8785; UTF-8; no
+  newline), a Node one-liner that is exact, `jq -jcS .catalog` (jq 1.7+)
+  and a Python one-liner for typical catalogs, and the cases where those
+  two diverge (exponent numbers, DEL, astral keys, lone surrogates). The
+  suite runs the README's own commands.
+- The embedded `sha256` is the snapshot's identity, not the file digest
+  (K-G5): it was already independent of `capturedAt`; tests now pin that
+  it is independent of every header field too.
+- README and CONTRIBUTING install with `npm ci` (K-3); CI already did,
+  and a test keeps it that way.
+
 ## [0.2.0] — 2026-11-08
 
 ### Added

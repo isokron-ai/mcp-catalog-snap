@@ -38,7 +38,8 @@ fingerprint, and a change to it shows up in a PR as a diff you can read.
 
 ## 60-second usage
 
-Requires Node ≥ 20.
+Requires Node ≥ 20. To run from a clone instead of npm, install with
+`npm ci` (the pinned lockfile), not `npm install`, then `npm run build`.
 
 ```sh
 # 1. snapshot a stdio server (everything after `--` is the server command)
@@ -83,6 +84,7 @@ sending the literal string. Entries also accept `args`, `env` and `cwd`.
 | `check [--server N] [--ignore-descriptions] [--allow-additions [--allow-write-additions]] [--json] [--update] [--report F]` | re-capture, diff, exit 1 on drift |
 | `diff A.json B.json [--json]` | diff two snapshot files |
 | `hash [FILE \| -- cmd … \| --url U]` | print the catalog fingerprint (sha256) |
+| `matrix --flag-sets F [-- cmd … \| --url U \| --server N]` | one snapshot per flag set + which tools, annotations and schemas differ between sets (see [Flag matrix](#flag-matrix)) |
 | `sweep [--from F \| -- cmd … \| --url U] [--json] [--report F] [--md F]` | static sweep report; exit 4 over budget |
 
 Options are strict: an option the command does not take (a typo such as
@@ -141,6 +143,96 @@ from git, or re-capture it with `snapshot` and review the diff. The hash is
 an integrity check, not a signature: someone who edits the catalog *and*
 recomputes `sha256` produces a valid file, which is why snapshot changes
 belong in code review.
+
+## Flag matrix
+
+Many servers list different tools depending on how they are started:
+`--read-only` drops write tools, a toolset flag adds a group, a
+"destructive" switch removes tools or swaps one for a narrower tool *under
+the same name*. A snapshot shows one of those catalogs. `matrix` takes a
+list of flag sets, captures the server once per set in one run (one launch
+per set, one after the other), and reports what changes between them.
+
+```sh
+cat > k8s-sets.json <<'EOF'
+[
+  { "name": "default" },
+  { "name": "read-only",      "args": ["--read-only"] },
+  { "name": "no-destructive", "args": ["--disable-destructive"] },
+  { "name": "all-toolsets",   "args": ["--toolsets", "core,config,helm"] }
+]
+EOF
+mcp-catalog-snap matrix --flag-sets k8s-sets.json -- npx -y kubernetes-mcp-server@<version>
+```
+
+- A set is `{"name", "args"?, "env"?, "headers"?}`. `args` are appended to
+  the server's command line and `env` is layered on its environment (stdio);
+  `headers` are added to an HTTP target's headers (for servers that take
+  toolsets or read-only mode as headers). `${VAR}` is expanded as in the
+  config file. Names are file names: letters, digits, `.`, `_`, `-`.
+- A configured server can carry its sets as `"flagSets": [...]` in
+  `.mcp-catalog.json`; then `matrix --server NAME` needs no file.
+- Output: `<dir>/<server>.matrix/<set>.json`, an ordinary format-2
+  snapshot per set (`check`, `diff` and `hash` read them; `flagSet` and
+  `launch` in the header say which set and which arguments), and
+  `<dir>/<server>.matrix/_matrix.json` (`mcp-catalog-snap/matrix/1`, no
+  timestamps, so the same catalogs give the same bytes). `--no-write`
+  prints only; `--json` prints the report.
+- The report lists, per section, every tool / prompt / template with the
+  sets it appears in and its **variants**: definitions grouped by
+  fingerprint and lettered A, B, … in set order, each tool variant with its
+  annotations and read-only / write / destructive class, and the JSON paths
+  where variant B differs from A. `versusBaseline` compares every set with
+  the first (added, removed, changed, and the `SAFETY` view: added tools that
+  can write, tools that became less safe).
+- Exit 0 when every set was captured; 2 when any failed (the others are
+  still written, and the report records the error).
+
+The test fixture `test/fixtures/servers/flags-stdio.mjs` mimics those
+flags; its matrix reads:
+
+```
+flag matrix: flags-server 0.0.1, 4 flag set(s), 4 captured, baseline "default"
+  default         4 tools, 0 prompts, 0 templates  protocol 2025-11-25  sha256 7aab9941…
+  read-only       3 tools, 0 prompts, 0 templates  protocol 2025-11-25  sha256 91fa0e80…
+  no-destructive  3 tools, 0 prompts, 0 templates  protocol 2025-11-25  sha256 a60bf797…
+  all-toolsets    7 tools, 0 prompts, 0 templates  protocol 2025-11-25  sha256 b984076d…
+
+tools: 7 across all sets, 2 identical in every set, 5 differ
+  name            default   read-only  no-destructive  all-toolsets
+  helm_install    -         -          -               A write
+  helm_list       -         -          -               A ro
+  helm_uninstall  -         -          -               A destr
+  pods_delete     A destr   -          -               A destr
+  pods_run        A write   B ro       A write         A write
+  pods_run: A -> B: /annotations/destructiveHint, /annotations/readOnlyHint, /description, /inputSchema/properties/namespace
+
+versus baseline "default":
+  read-only       tools +0 -1 ~1
+  no-destructive  tools +0 -1 ~0
+  all-toolsets    tools +3 -0 ~0
+    SAFETY: 2 added tool(s) are not read-only (1 destructive): helm_install, helm_uninstall
+```
+
+`pods_run` is one registration with two meanings: a writable tool by
+default, a read-only dry run under `--read-only`. Without the matrix, a
+read-only snapshot would show only the second.
+
+## Telemetry
+
+Some servers report usage by default. Every stdio server catalog-snap
+launches (`snapshot`, `check`, `hash`, `sweep`, `matrix`) gets common
+opt-out variables: `DO_NOT_TRACK=1`, `OTEL_SDK_DISABLED=true`,
+`CHECKPOINT_DISABLE=1`, `HF_HUB_DISABLE_TELEMETRY=1`,
+`DOTNET_CLI_TELEMETRY_OPTOUT=1`, `NEXT_TELEMETRY_DISABLED=1`,
+`SCARF_ANALYTICS=false` and `ANONYMIZED_TELEMETRY=false`. They override
+the inherited environment; the server's own `env` (config `env`, `--env`)
+still wins. Add server-specific ones with `--telemetry-env KEY=VALUE`
+(repeatable) or config `"telemetryEnv": {"GRAFANA_USAGE_STATS":
+"disabled"}`; drop the built-in set with `--no-telemetry-defaults` or
+config `"telemetryDefaults": false`. The snapshot records the variables
+the child received, with their values, under `launch.telemetryEnv`. HTTP
+servers run elsewhere and are not affected.
 
 ## Static sweep
 
@@ -353,19 +445,64 @@ A schema change reads the same way, with the path that moved:
 
 ```json
 {
-  "capturedAt": "2026-10-31T23:01:48.036Z",
-  "capturedWith": "mcp-catalog-snap/0.2.0",
+  "capturedAt": "2026-11-10T19:09:16.838Z",
+  "capturedWith": "mcp-catalog-snap/0.3.0",
   "catalog": {
     "prompts": [],
     "resourceTemplates": [ { "uriTemplate": "kronicle://docs/{slug}", "...": "..." } ],
     "tools": [ { "name": "audit_assumptions", "description": "...", "inputSchema": { "...": "..." }, "annotations": { "...": "..." } } ]
   },
-  "format": "mcp-catalog-snap/1",
+  "flagSet": null,
+  "format": "mcp-catalog-snap/2",
+  "handshake": {
+    "clientCapabilities": {},
+    "clientInfo": { "name": "mcp-catalog-snap", "version": "0.3.0" },
+    "negotiatedProtocolVersion": "2025-11-25",
+    "requestedProtocolVersion": "2025-11-25"
+  },
+  "launch": {
+    "args": ["-y", "kronicle-lite@0.2.0", "serve", "--token", "***"],
+    "command": "npx",
+    "env": { "KRONICLE_LITE_DATA_DIR": "/tmp/kl", "API_TOKEN": "***" },
+    "telemetryEnv": { "DO_NOT_TRACK": "1", "OTEL_SDK_DISABLED": "true", "...": "..." },
+    "transport": "stdio"
+  },
   "protocolVersion": "2025-11-25",
   "server": { "name": "kronicle-lite", "version": "0.2.0" },
   "sha256": "38506578bae09476f1d2b2a6722b35a9cc5b3925013d765b1ed4cac21ecab698"
 }
 ```
+
+Header fields (none of them is hashed):
+
+- `handshake`: the initialize exchange as it happened on the wire, from
+  the request this client sent (`requestedProtocolVersion`,
+  `clientCapabilities`, `clientInfo`) and the server's answer
+  (`negotiatedProtocolVersion`). Servers can list different tools for a
+  different requested version or client capabilities, so both are kept.
+  `protocolVersion` repeats the negotiated version for format-1 readers.
+- `launch`: how the server was reached. stdio: `command`, `args`,
+  the `env` overrides the caller set (config `env`, `--env`; the inherited
+  environment is not recorded) and `telemetryEnv` (see
+  [Telemetry](#telemetry)). HTTP: `url` (origin + path, credential-looking
+  segments masked, query never recorded) and the `headers` names (values
+  never recorded). Credentials are masked before writing: values of
+  credential-named flags (`--token`, `--api-key=`, `--pat`, `-t`/`-k`/`-p`),
+  `-H`/`--header` values, `NAME=VALUE` where NAME names a credential, URL
+  passwords for any scheme, `Bearer` / `Authorization` values,
+  credential-looking strings, env values whose name looks like a credential,
+  and any credential the target is known to carry. Masking is
+  pattern-based: pass credentials through credential-named environment
+  variables (`--env GITHUB_TOKEN=…`, config `"env": {"API_KEY":
+  "${API_KEY}"}`) rather than unusual flags. Paths are recorded as given;
+  use relative paths or `--cwd` if a snapshot you commit should not carry a
+  home directory.
+- `flagSet`: the set name for a snapshot written by `matrix`, else `null`.
+
+**Format 1** (written by 0.1 and 0.2) has none of the three. It is still
+read by every command; its `catalog` and `sha256` mean exactly what they
+mean in format 2, so a format-1 baseline checks against a 0.3 capture and
+`check --update` rewrites it as format 2.
 
 - Keys are in RFC 8785 order throughout (hence the header fields sorting
   around `catalog`); the file is the canonical form pretty-printed so git
@@ -380,12 +517,63 @@ A schema change reads the same way, with the path that moved:
   are written as `\u` escapes. None of this changes the values or
   `sha256`.
 - `sha256` covers the compact canonical bytes of `catalog` only. A server
-  version bump or a new capture time does not change it. Think of it as the
+  version bump, a new capture time or a different header (handshake,
+  launch, flag set) does not change it. Think of it as the
   **cache-prefix fingerprint**: same hash, same tool bytes.
+- **The embedded `sha256` is the snapshot's identity, not the file's
+  hash.** Two snapshots of the same catalog differ in `capturedAt` (and
+  possibly the header), so `sha256sum file.json` differs while the
+  embedded `sha256` is equal. Compare snapshots with
+  `mcp-catalog-snap hash FILE` (which also verifies the file) or
+  `jq -r .sha256 FILE`, and cite that value in evidence, not a file digest.
 - Tools and prompts are sorted by `name`, resource templates by
   `uriTemplate`. Every field the server returned is kept (`title`,
   `description`, `inputSchema`, `outputSchema`, `annotations`, `_meta`,
   `icons`, anything else); nothing is normalized away.
+
+### Reproducing the fingerprint
+
+`sha256` = SHA-256 of the UTF-8 bytes of the RFC 8785 (JCS) serialization
+of the `catalog` object:
+
+1. The input is the whole `catalog` object, `{"prompts": [...],
+   "resourceTemplates": [...], "tools": [...]}`, not the tools array. A
+   server with no prompts or templates still hashes the two empty arrays.
+2. `tools` and `prompts` are sorted by `name`, `resourceTemplates` by
+   `uriTemplate` (UTF-16 code unit order). The file already stores them in
+   that order.
+3. Object keys at every level are sorted by UTF-16 code units; no
+   whitespace; strings are escaped as ECMAScript `JSON.stringify` escapes
+   them (`\"`, `\\`, `\b \f \n \r \t`, other control characters as
+   lowercase `\u00xx`; everything else, non-ASCII included, as raw UTF-8);
+   numbers in ECMAScript shortest form (`1e-7`, `1e+21`, `4.5`, `100`).
+4. No trailing newline.
+
+In JavaScript, plain sorted JSON is exactly this, because JCS is defined
+by `JSON.stringify` and JS sorts strings by UTF-16 code units:
+
+```sh
+node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const k=v=>Array.isArray(v)?v.map(k):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).sort().map(x=>[x,k(v[x])])):v;process.stdout.write(require("crypto").createHash("sha256").update(JSON.stringify(k(s.catalog))).digest("hex")+"\n")' .mcp-catalog/kronicle-lite.json
+```
+
+`jq` 1.7 or later, and Python, reproduce it for typical catalogs:
+
+```sh
+jq -jcS .catalog .mcp-catalog/kronicle-lite.json | sha256sum
+python3 -c 'import hashlib,json,sys; c=json.load(open(sys.argv[1],encoding="utf-8"))["catalog"]; print(hashlib.sha256(json.dumps(c,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest())' .mcp-catalog/kronicle-lite.json
+```
+
+They differ from JCS, and so from `sha256`, when the catalog holds a
+number written with an exponent (`1e-7`: jq 1.7 prints `1E-7`, Python
+`1e-07`; jq also prints `1e+21` as `1E+21`), a DEL character (jq escapes U+007F), an
+object key outside the Basic Multilingual Plane next to one in
+U+E000–U+FFFF (jq and Python sort by code point), or a lone surrogate.
+jq 1.6 and earlier reformat many numbers. Python's default `json.dumps`
+(`ensure_ascii=True`, `", "` separators) and hashing only the tools array
+do not reproduce it at all. For exact independent checks use an RFC 8785
+library: [`canonicalize`](https://www.npmjs.com/package/canonicalize) (npm),
+[`rfc8785`](https://pypi.org/project/rfc8785/) (PyPI) or
+[`gowebpki/jcs`](https://github.com/gowebpki/jcs) (Go).
 
 ## CI
 
@@ -399,7 +587,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rafe-walker/mcp-catalog-snap@v0.2.0
+      - uses: rafe-walker/mcp-catalog-snap@v0.3.0
         with:
           servers-config: .mcp-catalog.json   # default
           # ignore-descriptions: 'true'
@@ -426,7 +614,7 @@ longer than any backtick run in the text, so it cannot close the block.
 ### Plain shell
 
 ```yaml
-      - run: npx -y mcp-catalog-snap@0.2.0 check
+      - run: npx -y mcp-catalog-snap@0.3.0 check
 ```
 
 In a plain `run:` step the server's stderr goes to the log unfiltered (the
@@ -531,7 +719,9 @@ servers, checked in this repo's own CI:
 
 ## Contributing
 
-See `CONTRIBUTING.md` (DCO sign-off, Apache-2.0).
+See `CONTRIBUTING.md` (DCO sign-off, Apache-2.0). Install dependencies with
+`npm ci`: `npm install` can leave a `node_modules` that does not match the
+lockfile (a stale tree once broke the type build and the CLI).
 
 ---
 

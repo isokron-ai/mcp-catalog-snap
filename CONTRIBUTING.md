@@ -17,13 +17,14 @@ that keep it small are the most welcome.
 - **Format changes are breaking.** Anything that changes the snapshot
   layout, the canonicalization, what is included in the hashed `catalog`
   body, or the sort keys must bump `SNAPSHOT_FORMAT` and keep parsing the
-  previous format. A fingerprint computed by 0.1.0 must still be
-  reproducible by later releases.
+  previous format (`SNAPSHOT_FORMATS`; 0.3 writes `mcp-catalog-snap/2` and
+  reads `/1`). A fingerprint computed by 0.1.0 must still be reproducible
+  by later releases. CI installs with `npm ci`; so should you.
 
 ## Dev loop
 
 ```sh
-npm install
+npm ci             # exactly the lockfile; not `npm install` (a stale node_modules breaks the DTS build and the CLI)
 npm run build      # tsup → dist/
 npm test           # vitest (builds first; spawns kronicle-lite / sea-lite from node_modules)
 npm run lint       # eslint flat config

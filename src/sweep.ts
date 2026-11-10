@@ -21,6 +21,7 @@
 
 import type { SweepInput } from './adapters/types.js';
 import type { AnthropicCounts } from './anthropic.js';
+import type { Handshake } from './capture.js';
 import { canonicalJson, fingerprint, type JsonValue } from './canonical.js';
 import {
   CHOICE_LIST_EDGES,
@@ -101,6 +102,8 @@ export interface SweepReport {
   adapter: string;
   server: SweepInput['server'];
   protocolVersion: string | null;
+  /** The initialize handshake as sent and answered (null for offline inputs that do not carry it). */
+  handshake: Handshake | null;
   source: SweepInput['source'];
   measurement: {
     scope: string;
@@ -312,6 +315,7 @@ export function runSweep(input: SweepInput, opts: SweepOptions): SweepReport {
     adapter: input.adapter,
     server: input.server,
     protocolVersion: input.protocolVersion,
+    handshake: input.handshake ?? null,
     source: input.source,
     measurement: {
       scope: SCOPE,

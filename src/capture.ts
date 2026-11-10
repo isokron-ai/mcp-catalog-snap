@@ -18,7 +18,8 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 
-import { canonicalJson } from './canonical.js';
+import { canonicalJson, sortKeysDeep, type JsonValue } from './canonical.js';
+import { childEnv, describeLaunch, type LaunchRecord, type TelemetryOptions } from './launch.js';
 import { looksSecret, maskedArgs, safeUrl } from './redact.js';
 import { GroupStdioTransport, type GroupStdioParams } from './stdio-transport.js';
 import type { RawCapture } from './snapshot.js';
@@ -58,6 +59,25 @@ export interface CaptureOptions {
   totalTimeoutMs?: number;
   /** Where to send the child's stderr (stdio only). Default: inherit. */
   stderr?: 'inherit' | 'ignore' | 'pipe';
+  /** Telemetry-off environment for a launched stdio server (default: TELEMETRY_OFF_ENV). */
+  telemetry?: TelemetryOptions;
+}
+
+/**
+ * The initialize handshake as it happened on the wire: what this client
+ * asked for and sent, and the version the server answered with. Servers may
+ * list different tools depending on the requested version and the client
+ * capabilities, so a snapshot records both.
+ */
+export interface Handshake {
+  /** `protocolVersion` in the client's initialize request. */
+  requestedProtocolVersion: string | null;
+  /** `protocolVersion` in the server's initialize result (the session's version). */
+  negotiatedProtocolVersion: string | null;
+  /** `capabilities` in the client's initialize request. */
+  clientCapabilities: JsonValue;
+  /** `clientInfo` in the client's initialize request. */
+  clientInfo: JsonValue;
 }
 
 /**
@@ -139,15 +159,15 @@ export function cappedFetch(limit: number, inner: typeof fetch = fetch): typeof 
   };
 }
 
-function makeTransport(target: Target, opts: CaptureOptions): Transport {
+/** A transport for `target`, and the launch record a snapshot stores for it. */
+function makeTransport(target: Target, opts: CaptureOptions): { transport: Transport; launch: LaunchRecord } {
   const maxMessage = opts.maxMessageBytes ?? MAX_MESSAGE_BYTES;
   if (target.kind === 'stdio') {
     // The SDK default is a scrubbed env (HOME/PATH/...). A CI runner needs
     // proxies, tokens and npm config to reach the child, so inherit the full
-    // environment like a shell would, then layer the configured overrides.
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
-    Object.assign(env, target.env ?? {});
+    // environment like a shell would, set telemetry off, then layer the
+    // configured overrides.
+    const { env, telemetry } = childEnv(target, opts.telemetry);
     const params: GroupStdioParams = {
       command: target.command,
       args: target.args,
@@ -157,7 +177,7 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
     };
     if (target.cwd) params.cwd = target.cwd;
     // Own process group: closing (or a deadline) ends wrappers' grandchildren too, so nothing holds the pipes open.
-    return new GroupStdioTransport(params);
+    return { transport: new GroupStdioTransport(params), launch: describeLaunch(target, telemetry) };
   }
   let url: URL;
   try {
@@ -169,26 +189,43 @@ function makeTransport(target: Target, opts: CaptureOptions): Transport {
     throw new Error('--url must not carry user:password@ (send credentials with --bearer-file, --bearer-env or --header)');
   }
   const headers = target.headers ?? {};
-  return new StreamableHTTPClientTransport(url, {
+  const transport = new StreamableHTTPClientTransport(url, {
     requestInit: Object.keys(headers).length > 0 ? { headers } : {},
     fetch: cappedFetch(maxMessage),
   });
+  return { transport, launch: describeLaunch(target) };
 }
 
 /**
- * Wrap a transport so the negotiated protocol version is observable. The
- * SDK client only forwards it to transports that implement
+ * Wrap a transport so the handshake is observable. The negotiated version:
+ * the SDK client only forwards it to transports that implement
  * `setProtocolVersion` (HTTP does; stdio does not), so we hook that method
- * on whatever transport we were given.
+ * on whatever transport we were given. The requested version, capabilities
+ * and client info: read from the initialize request as it is sent.
  */
-function observeProtocolVersion(transport: Transport): { transport: Transport; get: () => string | null } {
+function observeHandshake(transport: Transport): { transport: Transport; get: () => string | null; handshake: () => Handshake } {
   let seen: string | null = null;
+  let sent: Record<string, unknown> | null = null;
   const orig = transport.setProtocolVersion?.bind(transport);
   transport.setProtocolVersion = (v: string): void => {
     seen = v;
     orig?.(v);
   };
-  return { transport, get: () => seen };
+  const send = transport.send.bind(transport);
+  transport.send = (message, options) => {
+    const m = message as { method?: unknown; params?: unknown };
+    if (sent === null && m.method === 'initialize' && m.params !== null && typeof m.params === 'object') {
+      sent = m.params as Record<string, unknown>;
+    }
+    return send(message, options);
+  };
+  const handshake = (): Handshake => ({
+    requestedProtocolVersion: typeof sent?.['protocolVersion'] === 'string' ? sent['protocolVersion'] : null,
+    negotiatedProtocolVersion: seen,
+    clientCapabilities: sortKeysDeep(sent?.['capabilities'] ?? {}),
+    clientInfo: sortKeysDeep(sent?.['clientInfo'] ?? null),
+  });
+  return { transport, get: () => seen, handshake };
 }
 
 async function listAll<T>(
@@ -223,6 +260,8 @@ export interface Session {
   server: RawCapture['server'];
   capabilities: ReturnType<Client['getServerCapabilities']>;
   protocolVersion: () => string | null;
+  /** The initialize handshake as sent and answered. */
+  handshake: () => Handshake;
   requestTimeoutMs: number;
   maxListBytes: number;
   close: () => Promise<void>;
@@ -239,7 +278,7 @@ function transportCause(err: unknown): MessageTooLargeError | null {
 
 /** Connect over an already-constructed transport (tests use InMemoryTransport). */
 export async function openSessionOnTransport(rawTransport: Transport, opts: CaptureOptions = {}): Promise<Session> {
-  const { transport, get } = observeProtocolVersion(rawTransport);
+  const { transport, get, handshake } = observeHandshake(rawTransport);
   const client = new Client({ name: 'mcp-catalog-snap', version: VERSION }, { capabilities: {} });
   const timeout = opts.timeoutMs ?? 30_000;
   let cause: MessageTooLargeError | null = null;
@@ -261,6 +300,7 @@ export async function openSessionOnTransport(rawTransport: Transport, opts: Capt
       server,
       capabilities: client.getServerCapabilities(),
       protocolVersion: get,
+      handshake,
       requestTimeoutMs: timeout,
       maxListBytes: opts.maxListBytes ?? MAX_LIST_BYTES,
       close,
@@ -274,7 +314,7 @@ export async function openSessionOnTransport(rawTransport: Transport, opts: Capt
 
 /** Connect by spawning / dialing the target. */
 export async function openSession(target: Target, opts: CaptureOptions = {}): Promise<Session> {
-  return openSessionOnTransport(makeTransport(target, opts), opts);
+  return openSessionOnTransport(makeTransport(target, opts).transport, opts);
 }
 
 /** List tools/prompts/resource templates over an open session. */
@@ -301,7 +341,7 @@ export async function listCatalog(session: Session): Promise<RawCapture> {
         return { items: r.resourceTemplates, nextCursor: r.nextCursor };
       })
     : [];
-  return { server: session.server, protocolVersion: session.protocolVersion(), tools, prompts, resourceTemplates };
+  return { server: session.server, protocolVersion: session.protocolVersion(), handshake: session.handshake(), tools, prompts, resourceTemplates };
 }
 
 /** Capture using an already-constructed transport (tests use InMemoryTransport). */
@@ -322,7 +362,8 @@ export async function captureFromTransport(rawTransport: Transport, opts: Captur
   );
 }
 
-/** Capture by spawning / dialing the target. */
+/** Capture by spawning / dialing the target. The result records how the server was launched (`launch`). */
 export async function capture(target: Target, opts: CaptureOptions = {}): Promise<RawCapture> {
-  return captureFromTransport(makeTransport(target, opts), opts);
+  const { transport, launch } = makeTransport(target, opts);
+  return { ...(await captureFromTransport(transport, opts)), launch };
 }

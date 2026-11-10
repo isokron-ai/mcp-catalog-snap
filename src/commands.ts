@@ -11,12 +11,14 @@
  *      was compared. Takes precedence over 2 and 1.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { fingerprint } from './canonical.js';
+import { fingerprint, prettyCanonical } from './canonical.js';
 import { capture, describeTarget, type CaptureOptions, type Target } from './capture.js';
 import { DEFAULT_CONFIG_FILE, DEFAULT_SNAPSHOT_DIR, loadConfig, type ServerSpec } from './config.js';
+import { childEnv, describeLaunch, type TelemetryOptions } from './launch.js';
+import { MATRIX_REPORT_FILE, applyFlagSet, buildMatrix, parseFlagSets, renderMatrix, type FlagSet, type MatrixCapture } from './matrix.js';
 import { contradictoryAnnotations, diffCatalogs, evaluate, type DriftPolicy } from './diff.js';
 import { renderDiff, renderSnapshotHeader, type CheckReport, type ServerResult } from './render.js';
 import {
@@ -66,6 +68,8 @@ export interface CommonOptions extends TargetSelection {
   quiet?: boolean;
   /** Where the stdio child's stderr goes (default: inherit; --json implies ignore). */
   childStderr?: 'inherit' | 'ignore';
+  /** Telemetry-off environment for launched stdio servers (`--telemetry-env`, `--no-telemetry-defaults`), on top of the config's. */
+  telemetry?: TelemetryOptions;
 }
 
 interface Resolved {
@@ -73,6 +77,8 @@ interface Resolved {
   snapshotDir: string;
   /** Ad-hoc targets have no fixed name until the server tells us. */
   adHoc: boolean;
+  /** The config file's telemetry settings (empty for an ad-hoc target). */
+  telemetry: TelemetryOptions;
 }
 
 function resolveTargets(sel: TargetSelection): Resolved {
@@ -83,6 +89,7 @@ function resolveTargets(sel: TargetSelection): Resolved {
       specs: [{ name: sel.name ?? '', target: sel.target, ...(sel.label !== undefined ? { label: sel.label } : {}) }],
       snapshotDir: resolve(cwd, sel.dir ?? DEFAULT_SNAPSHOT_DIR),
       adHoc: true,
+      telemetry: {},
     };
   }
   if (sel.label !== undefined) throw new Error('--label names an ad-hoc target (`-- command` or --url); configured servers are labelled by their name');
@@ -104,7 +111,7 @@ function resolveTargets(sel: TargetSelection): Resolved {
     }
   }
   if (specs.length === 0) throw new Error(`${configPath} lists no servers`);
-  return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false };
+  return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false, telemetry: cfg.telemetry };
 }
 
 /** How messages and reports name a server: `--label`, else its name, else `describeTarget` (never the stdio arguments). */
@@ -138,12 +145,20 @@ function readVerifiedSnapshot(path: string): Snapshot {
   return snap;
 }
 
-function captureOpts(o: CommonOptions): CaptureOptions {
+/** Telemetry settings: the config's, then the command line's (its extras win; either can turn the defaults off). */
+export function mergeTelemetry(config: TelemetryOptions, cli: TelemetryOptions = {}): TelemetryOptions {
+  const t: TelemetryOptions = { extra: { ...(config.extra ?? {}), ...(cli.extra ?? {}) } };
+  if (config.defaults === false || cli.defaults === false) t.defaults = false;
+  return t;
+}
+
+function captureOpts(o: CommonOptions, config: TelemetryOptions = {}): CaptureOptions {
   const c: CaptureOptions = {};
   if (o.timeoutMs !== undefined) c.timeoutMs = o.timeoutMs;
   if (o.totalTimeoutMs !== undefined) c.totalTimeoutMs = o.totalTimeoutMs;
   // When emitting JSON, keep the child's stderr out of the way.
   c.stderr = o.childStderr ?? (o.json ? 'ignore' : 'inherit');
+  c.telemetry = mergeTelemetry(config, o.telemetry);
   return c;
 }
 
@@ -173,7 +188,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
   let failures = 0;
   for (const spec of resolved.specs) {
     try {
-      const raw = await capture(spec.target, captureOpts(opts));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
       const snap = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
       warnAnnotations(io, name, snap);
@@ -228,7 +243,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   for (const spec of resolved.specs) {
     const label = labelOf(spec);
     try {
-      const raw = await capture(spec.target, captureOpts(opts));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
       const live = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
       warnAnnotations(io, name, live);
@@ -363,7 +378,7 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     const resolved = resolveTargets(opts);
     io = scrubbed(rawIo, resolved.specs);
     for (const spec of resolved.specs) {
-      const raw = await capture(spec.target, captureOpts(opts));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
       const snap = buildSnapshot(raw);
       io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${visible(spec.name || raw.server.name)}` : snap.sha256);
     }
@@ -372,4 +387,98 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     io.err(`error: ${oneLine((err as Error).message)}`);
     return err instanceof SnapshotIntegrityError ? EXIT_TAMPERED : EXIT_ERROR;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* matrix                                                             */
+/* ------------------------------------------------------------------ */
+
+export interface MatrixOptions extends CommonOptions {
+  /** JSON file of flag sets; default: the configured server's `flagSets`. */
+  flagSetsFile?: string;
+  /** Print only; write no files. */
+  noWrite?: boolean;
+}
+
+function loadFlagSets(file: string): FlagSet[] {
+  const text = readInputText(file, 'flag sets');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`${file}: not valid JSON (${(err as Error).message})`);
+  }
+  return parseFlagSets(parsed, file);
+}
+
+/**
+ * Capture one server under each flag set (sequentially, one launch per
+ * set), write a format-2 snapshot per set to `<dir>/<server>.matrix/<set>.json`
+ * and the comparison to `<dir>/<server>.matrix/_matrix.json`. Exit 0 when
+ * every set was captured, 2 when any failed (the others are still written).
+ */
+export async function cmdMatrix(opts: MatrixOptions, rawIo: IO): Promise<number> {
+  let resolved: Resolved;
+  let spec: ServerSpec;
+  let sets: FlagSet[];
+  let targets: Target[];
+  try {
+    resolved = resolveTargets(opts);
+    if (resolved.specs.length !== 1) {
+      throw new Error(`matrix captures one server: give an ad-hoc target (\`-- command\` or --url) or --server NAME (config lists ${resolved.specs.length})`);
+    }
+    spec = resolved.specs[0]!;
+    if (opts.flagSetsFile !== undefined) sets = loadFlagSets(opts.flagSetsFile);
+    else if (spec.flagSets !== undefined) sets = spec.flagSets;
+    else throw new Error('matrix needs flag sets: --flag-sets FILE, or "flagSets" on the configured server');
+    targets = sets.map((s) => applyFlagSet(spec.target, s));
+  } catch (err) {
+    rawIo.err(`error: ${oneLine((err as Error).message)}`);
+    return EXIT_ERROR;
+  }
+  const io = redactingIO(rawIo, [...targetSecrets(spec.target), ...targets.flatMap((t) => targetSecrets(t))]);
+  const label = labelOf(spec);
+  const copts = captureOpts(opts, resolved.telemetry);
+  const captures: MatrixCapture[] = [];
+  const texts = new Map<string, string>();
+  for (let i = 0; i < sets.length; i++) {
+    const set = sets[i]!;
+    const target = targets[i]!;
+    try {
+      const raw = await capture(target, copts);
+      const snap = buildSnapshot(raw, { flagSet: set.name });
+      warnAnnotations(io, `${spec.name || raw.server.name} [${set.name}]`, snap);
+      const text = serializeSnapshot(snap);
+      assertNoSecrets(text, targetSecrets(target), 'captured catalog');
+      const file = `${set.name}.json`;
+      texts.set(file, text);
+      captures.push({ set, launch: snap.launch ?? null, snapshot: snap, file });
+    } catch (err) {
+      const applied = target.kind === 'stdio' ? childEnv(target, copts.telemetry).telemetry : {};
+      captures.push({ set, launch: describeLaunch(target, applied), error: scrubErrorText((err as Error).message) });
+      io.err(`error: ${visible(label)}: flag set "${set.name}": ${oneLine((err as Error).message)}`);
+    }
+  }
+  const report = scrubDeep(buildMatrix(captures), io.variants());
+  const failed = captures.filter((c) => c.snapshot === undefined).length;
+  const name = spec.name || report.server?.name || '';
+  if (!opts.noWrite && name !== '' && texts.size > 0) {
+    const dir = join(resolved.snapshotDir, `${safeFileName(name)}.matrix`);
+    try {
+      mkdirSync(dir, { recursive: true });
+      for (const [file, text] of texts) writeText(io, join(dir, file), text);
+      writeText(io, join(dir, MATRIX_REPORT_FILE), jsonSafe(prettyCanonical(report)));
+    } catch (err) {
+      io.err(`error: cannot write ${dir}: ${oneLine((err as Error).message)}`);
+      return EXIT_ERROR;
+    }
+    const stale = readdirSync(dir).filter((f) => f.endsWith('.json') && f !== MATRIX_REPORT_FILE && !texts.has(f)).sort();
+    if (stale.length > 0) {
+      io.err(`warning: ${visible(dir)} also holds ${stale.map((f) => visible(f)).join(', ')}, not written by this run (${MATRIX_REPORT_FILE} lists the sets it covers)`);
+    }
+    if (!opts.quiet && !opts.json) io.out(`wrote ${dir}/ (${texts.size} snapshot(s) + ${MATRIX_REPORT_FILE})`);
+  }
+  if (opts.json) io.out(jsonSafe(JSON.stringify(report, null, 2)));
+  else io.out(renderMatrix(report));
+  return failed > 0 ? EXIT_ERROR : EXIT_OK;
 }
