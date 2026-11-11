@@ -5,6 +5,8 @@
 //   --read-only            only read-only tools; pods_run is replaced by a read-only dry-run variant of the same name
 //   --disable-destructive  drop destructive tools
 //   --crash                exit 3 before answering initialize
+//   --fail-config FILE     write "Error: cannot read config FILE: no such file or directory" to stderr, exit 2
+//   (an unknown toolset name is refused like a real server does: an error line on stderr, exit 1)
 //   --protocol V           answer initialize with protocolVersion V (default: echo the requested one)
 // Env: SHOW_ENV=A,B lists a tool "env" whose description is the JSON of those variables as this process sees them.
 import { createInterface } from 'node:readline';
@@ -16,8 +18,18 @@ const value = (f) => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 if (flag('--crash')) process.exit(3);
+if (value('--fail-config') !== undefined) {
+  process.stderr.write(`Error: cannot read config ${value('--fail-config')}: no such file or directory\n`);
+  process.exit(2);
+}
 
 const toolsets = (value('--toolsets') ?? 'core,config').split(',');
+const unknownSet = toolsets.find((t) => !['core', 'config', 'helm'].includes(t));
+if (unknownSet !== undefined) {
+  process.stderr.write('starting server\n');
+  process.stderr.write(`Error: invalid toolset name: ${unknownSet}, valid names are: core, config, helm\n`);
+  process.exit(1);
+}
 const readOnly = flag('--read-only');
 const noDestructive = flag('--disable-destructive');
 const RO = { readOnlyHint: true };

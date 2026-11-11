@@ -6,6 +6,32 @@ uses semantic versioning once past 0.x.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Local paths no longer leak into snapshot and matrix files.** The
+  `launch` header masked only path segments that looked like tokens (a
+  temp-dir component, say). The rest of each absolute path stayed: the
+  operator's home and user name, temp folders, directory names. Absolute
+  paths in the stdio `command`, `args` and `env` values are now rewritten
+  before credential masking:
+  - inside the project root (the config file's directory, or the working
+    directory for an ad-hoc target): `<project>/` + the relative path;
+  - anywhere else: `<local>/` + the last segment.
+
+  `file://` URLs and Windows drive paths are covered; http(s) URLs and
+  relative paths are untouched. The same rewrite applies to the error texts
+  the matrix report (`_matrix.json`) and the check report record. Header
+  only: fingerprints are unchanged.
+- **A server that exits on a config error is explained.** The matrix (and
+  every capture error) recorded only the SDK's `MCP error -32000: Connection
+  closed` for a server that exited before answering, for example on an
+  unknown toolset or an unreadable config file. The error now carries the
+  exit code (or signal) and the server's last stderr lines (at most 8, 400
+  characters each), credentials and local paths scrubbed as before. The
+  child's stderr is now always read through a pipe, so this works under
+  `--json` too: there it is drained, not shown. A server stopped by
+  catalog-snap itself is not reported as having exited.
+
 ## [0.3.0] — 2026-11-10
 
 Snapshots fit for an audit evidence trail: they say how they were taken,

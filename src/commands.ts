@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { fingerprint, prettyCanonical } from './canonical.js';
 import { capture, describeTarget, type CaptureOptions, type Target } from './capture.js';
@@ -31,6 +31,7 @@ import {
   type Snapshot,
 } from './snapshot.js';
 import { readInputText } from './read-input.js';
+import { redactLocalPaths } from './local-paths.js';
 import { jsonSafe, oneLine, scrubErrorText, visible } from './safe-text.js';
 import { VERSION } from './version.js';
 import { assertCredentialLengths, assertNoSecrets, redactingIO, scrubDeep, targetSecrets, writeText, type IO } from './redact.js';
@@ -79,6 +80,8 @@ interface Resolved {
   adHoc: boolean;
   /** The config file's telemetry settings (empty for an ad-hoc target). */
   telemetry: TelemetryOptions;
+  /** The project root local paths are written relative to: the config file's directory, or the working directory. */
+  root: string;
 }
 
 function resolveTargets(sel: TargetSelection): Resolved {
@@ -90,6 +93,7 @@ function resolveTargets(sel: TargetSelection): Resolved {
       snapshotDir: resolve(cwd, sel.dir ?? DEFAULT_SNAPSHOT_DIR),
       adHoc: true,
       telemetry: {},
+      root: cwd,
     };
   }
   if (sel.label !== undefined) throw new Error('--label names an ad-hoc target (`-- command` or --url); configured servers are labelled by their name');
@@ -111,7 +115,7 @@ function resolveTargets(sel: TargetSelection): Resolved {
     }
   }
   if (specs.length === 0) throw new Error(`${configPath} lists no servers`);
-  return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false, telemetry: cfg.telemetry };
+  return { specs, snapshotDir: sel.dir ? resolve(cwd, sel.dir) : cfg.snapshotDir, adHoc: false, telemetry: cfg.telemetry, root: dirname(configPath) };
 }
 
 /** How messages and reports name a server: `--label`, else its name, else `describeTarget` (never the stdio arguments). */
@@ -152,11 +156,12 @@ export function mergeTelemetry(config: TelemetryOptions, cli: TelemetryOptions =
   return t;
 }
 
-function captureOpts(o: CommonOptions, config: TelemetryOptions = {}): CaptureOptions {
+function captureOpts(o: CommonOptions, config: TelemetryOptions = {}, root?: string): CaptureOptions {
   const c: CaptureOptions = {};
+  if (root !== undefined) c.pathRoot = root;
   if (o.timeoutMs !== undefined) c.timeoutMs = o.timeoutMs;
   if (o.totalTimeoutMs !== undefined) c.totalTimeoutMs = o.totalTimeoutMs;
-  // When emitting JSON, keep the child's stderr out of the way.
+  // When emitting JSON, keep the child's stderr out of the way (it is still read: its last lines explain a failed capture).
   c.stderr = o.childStderr ?? (o.json ? 'ignore' : 'inherit');
   c.telemetry = mergeTelemetry(config, o.telemetry);
   return c;
@@ -188,7 +193,7 @@ export async function cmdSnapshot(opts: SnapshotOptions, rawIo: IO): Promise<num
   let failures = 0;
   for (const spec of resolved.specs) {
     try {
-      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry, resolved.root));
       const snap = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
       warnAnnotations(io, name, snap);
@@ -243,7 +248,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
   for (const spec of resolved.specs) {
     const label = labelOf(spec);
     try {
-      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry, resolved.root));
       const live = buildSnapshot(raw);
       const name = spec.name || raw.server.name;
       warnAnnotations(io, name, live);
@@ -283,7 +288,7 @@ export async function cmdCheck(opts: CheckOptions, rawIo: IO): Promise<number> {
       }
     } catch (err) {
       const tampered = err instanceof SnapshotIntegrityError;
-      const r: ServerResult = { server: label, ok: false, drift: false, error: scrubErrorText((err as Error).message) };
+      const r: ServerResult = { server: label, ok: false, drift: false, error: redactLocalPaths(scrubErrorText((err as Error).message), resolved.root) };
       if (tampered) {
         r.tampered = true;
         r.snapshotPath = err.path;
@@ -378,7 +383,7 @@ export async function cmdHash(opts: HashOptions, rawIo: IO): Promise<number> {
     const resolved = resolveTargets(opts);
     io = scrubbed(rawIo, resolved.specs);
     for (const spec of resolved.specs) {
-      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry));
+      const raw = await capture(spec.target, captureOpts(opts, resolved.telemetry, resolved.root));
       const snap = buildSnapshot(raw);
       io.out(resolved.specs.length > 1 ? `${snap.sha256}  ${visible(spec.name || raw.server.name)}` : snap.sha256);
     }
@@ -438,7 +443,7 @@ export async function cmdMatrix(opts: MatrixOptions, rawIo: IO): Promise<number>
   }
   const io = redactingIO(rawIo, [...targetSecrets(spec.target), ...targets.flatMap((t) => targetSecrets(t))]);
   const label = labelOf(spec);
-  const copts = captureOpts(opts, resolved.telemetry);
+  const copts = captureOpts(opts, resolved.telemetry, resolved.root);
   const captures: MatrixCapture[] = [];
   const texts = new Map<string, string>();
   for (let i = 0; i < sets.length; i++) {
@@ -455,7 +460,7 @@ export async function cmdMatrix(opts: MatrixOptions, rawIo: IO): Promise<number>
       captures.push({ set, launch: snap.launch ?? null, snapshot: snap, file });
     } catch (err) {
       const applied = target.kind === 'stdio' ? childEnv(target, copts.telemetry).telemetry : {};
-      captures.push({ set, launch: describeLaunch(target, applied), error: scrubErrorText((err as Error).message) });
+      captures.push({ set, launch: describeLaunch(target, applied, resolved.root), error: redactLocalPaths(scrubErrorText((err as Error).message), resolved.root) });
       io.err(`error: ${visible(label)}: flag set "${set.name}": ${oneLine((err as Error).message)}`);
     }
   }
