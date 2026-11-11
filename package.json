@@ -1,6 +1,6 @@
 {
   "name": "mcp-catalog-snap",
-  "version": "0.3.0",
+  "version": "0.3.1-dev",
   "description": "Snapshot an MCP server's tools/prompts/resource-template catalog as canonical JSON and fail CI on byte drift — catalog drift silently invalidates prompt-cache prefixes and changes agent behavior.",
   "license": "Apache-2.0",
   "type": "module",
