@@ -178,6 +178,12 @@ mcp-catalog-snap matrix --flag-sets k8s-sets.json -- npx -y kubernetes-mcp-serve
   `<dir>/<server>.matrix/_matrix.json` (`mcp-catalog-snap/matrix/1`, no
   timestamps, so the same catalogs give the same bytes). `--no-write`
   prints only; `--json` prints the report.
+- A set whose server exits before answering (a refused flag, an unknown
+  toolset, a config file it cannot read) is reported with the exit code
+  and the server's own last stderr lines, e.g. `Connection closed (the
+  server exited with code 1 before answering; its stderr: Error: invalid
+  toolset name: …)`, also under `--json`, where the server's stderr is not
+  shown.
 - The report lists, per section, every tool / prompt / template with the
   sets it appears in and its **variants**: definitions grouped by
   fingerprint and lettered A, B, … in set order, each tool variant with its
@@ -463,7 +469,7 @@ A schema change reads the same way, with the path that moved:
   "launch": {
     "args": ["-y", "kronicle-lite@0.2.0", "serve", "--token", "***"],
     "command": "npx",
-    "env": { "KRONICLE_LITE_DATA_DIR": "/tmp/kl", "API_TOKEN": "***" },
+    "env": { "KRONICLE_LITE_DATA_DIR": "<local>/kl", "API_TOKEN": "***" },
     "telemetryEnv": { "DO_NOT_TRACK": "1", "OTEL_SDK_DISABLED": "true", "...": "..." },
     "transport": "stdio"
   },
@@ -494,9 +500,15 @@ Header fields (none of them is hashed):
   and any credential the target is known to carry. Masking is
   pattern-based: pass credentials through credential-named environment
   variables (`--env GITHUB_TOKEN=…`, config `"env": {"API_KEY":
-  "${API_KEY}"}`) rather than unusual flags. Paths are recorded as given;
-  use relative paths or `--cwd` if a snapshot you commit should not carry a
-  home directory.
+  "${API_KEY}"}`) rather than unusual flags.
+  Local paths are rewritten before anything else, so a snapshot can be
+  committed without the operator's home, user name, temp folders or
+  directory layout: an absolute path inside the project root (the config
+  file's directory, or the working directory for an ad-hoc target) becomes
+  `<project>/` + its relative path, and any other absolute path
+  `<local>/` + its last segment (`/opt/homebrew/bin/node` →
+  `<local>/node`). URLs and relative paths are kept as written. Matrix and
+  check reports rewrite paths in their error texts the same way.
 - `flagSet`: the set name for a snapshot written by `matrix`, else `null`.
 
 **Format 1** (written by 0.1 and 0.2) has none of the three. It is still

@@ -59,6 +59,8 @@ export interface CaptureOptions {
   totalTimeoutMs?: number;
   /** Where to send the child's stderr (stdio only). Default: inherit. */
   stderr?: 'inherit' | 'ignore' | 'pipe';
+  /** Where `<project>/…` paths in the launch record are relative to (default: the working directory). */
+  pathRoot?: string;
   /** Telemetry-off environment for a launched stdio server (default: TELEMETRY_OFF_ENV). */
   telemetry?: TelemetryOptions;
 }
@@ -177,7 +179,7 @@ function makeTransport(target: Target, opts: CaptureOptions): { transport: Trans
     };
     if (target.cwd) params.cwd = target.cwd;
     // Own process group: closing (or a deadline) ends wrappers' grandchildren too, so nothing holds the pipes open.
-    return { transport: new GroupStdioTransport(params), launch: describeLaunch(target, telemetry) };
+    return { transport: new GroupStdioTransport(params), launch: describeLaunch(target, telemetry, opts.pathRoot) };
   }
   let url: URL;
   try {
@@ -362,8 +364,26 @@ export async function captureFromTransport(rawTransport: Transport, opts: Captur
   );
 }
 
+/**
+ * A failed stdio capture, explained by the server: when it exited on its own (a refused flag, a bad config
+ * file), the SDK's "Connection closed" gets the exit code and the server's last stderr lines appended.
+ */
+export function explainExit(err: unknown, transport: Transport): unknown {
+  if (!(transport instanceof GroupStdioTransport)) return err;
+  const info = transport.exitInfo();
+  if (!info || !(err instanceof Error)) return err;
+  const how = info.signal ? `was killed by ${info.signal}` : `exited with code ${info.code ?? '?'}`;
+  const said = info.stderrTail.length ? `; its stderr: ${info.stderrTail.join(' | ')}` : '; it wrote nothing to stderr';
+  const e = new Error(`${err.message} (the server ${how} before answering${said})`);
+  return Object.assign(e, { cause: err });
+}
+
 /** Capture by spawning / dialing the target. The result records how the server was launched (`launch`). */
 export async function capture(target: Target, opts: CaptureOptions = {}): Promise<RawCapture> {
   const { transport, launch } = makeTransport(target, opts);
-  return { ...(await captureFromTransport(transport, opts)), launch };
+  try {
+    return { ...(await captureFromTransport(transport, opts)), launch };
+  } catch (err) {
+    throw explainExit(err, transport);
+  }
 }
