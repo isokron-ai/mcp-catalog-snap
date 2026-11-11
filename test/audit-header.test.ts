@@ -6,7 +6,7 @@
 
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -17,7 +17,6 @@ import { describe, expect, it } from 'vitest';
 import { capture, captureFromTransport, type Target } from '../src/capture.js';
 import { cmdCheck, cmdHash, cmdSnapshot, EXIT_OK, type IO } from '../src/commands.js';
 import { describeLaunch } from '../src/launch.js';
-import { maskedArgs } from '../src/redact.js';
 import { renderSnapshotHeader } from '../src/render.js';
 import { runSweep } from '../src/sweep.js';
 import { parseToolsListFile } from '../src/adapters/tools-list.js';
@@ -105,9 +104,9 @@ describe('launch record (server command, arguments, flags, environment)', () => 
     const snap = parseSnapshot(text, 'f');
     expect(snap.launch).toEqual({
       transport: 'stdio',
-      command: process.execPath,
-      // (a long path segment that looks like a token is masked too: that is maskedArgs' rule, not specific to this record)
-      args: [...maskedArgs([FLAGS]), '--toolsets', 'core,helm', '--read-only', '--token', '***', '--kubeconfig=/k/config'],
+      // local paths outside the project (here the snapshot dir) keep their last segment only
+      command: `<local>/${basename(process.execPath)}`,
+      args: ['<local>/flags-stdio.mjs', '--toolsets', 'core,helm', '--read-only', '--token', '***', '--kubeconfig=<local>/config'],
       env: { API_TOKEN: '***', KUBE_NAMESPACE: 'audit' },
       telemetryEnv: expect.objectContaining({ DO_NOT_TRACK: '1' }) as unknown as Record<string, string>,
     });
@@ -186,7 +185,7 @@ describe('format 1 snapshots', () => {
     expect(io.stdout.join('\n')).toContain('+ pods_list');
     const after = JSON.parse(readFileSync(join(dir, 'flags-server.json'), 'utf8')) as Record<string, unknown>;
     expect(after['format']).toBe(SNAPSHOT_FORMAT);
-    expect(after['launch']).toMatchObject({ transport: 'stdio', args: maskedArgs([FLAGS]) });
+    expect(after['launch']).toMatchObject({ transport: 'stdio', args: ['<local>/flags-stdio.mjs'] });
   });
 
   it('format 2 refuses a malformed header and names both formats on an unknown one', () => {

@@ -12,6 +12,7 @@
  */
 
 import type { Target } from './capture.js';
+import { redactLocalPaths, redactLocalPathsDeep } from './local-paths.js';
 import { REDACTED, credentialEnvName, maskArg, maskedArgs, safeUrl, scrubDeep, secretVariants, targetSecrets } from './redact.js';
 
 /**
@@ -97,19 +98,26 @@ export interface HttpLaunch {
 
 export type LaunchRecord = StdioLaunch | HttpLaunch;
 
-/** A launch record for `target`, safe to write to a snapshot: no credential the target carries survives in it. */
-export function describeLaunch(target: Target, telemetryApplied: Record<string, string> = {}): LaunchRecord {
+/**
+ * A launch record for `target`, safe to write to a snapshot: no credential the target carries survives in it,
+ * and no local path either (`<project>/…` inside `pathRoot`, else `<local>/<last segment>`; see local-paths.ts).
+ */
+export function describeLaunch(target: Target, telemetryApplied: Record<string, string> = {}, pathRoot: string = process.cwd()): LaunchRecord {
   let rec: LaunchRecord;
   if (target.kind === 'http') {
     rec = { transport: 'http', url: safeUrl(target.url), headers: Object.keys(target.headers ?? {}).sort() };
   } else {
+    // why: paths first, while they are whole; credential masking blanks token-like segments, which would leave
+    // the rest of a path behind and hide where it starts.
+    const local = (v: string) => redactLocalPaths(v, pathRoot);
     const env: Record<string, string> = {};
     for (const k of Object.keys(target.env ?? {}).sort()) {
       const v = target.env![k]!;
-      env[k] = credentialEnvName(k) ? REDACTED : maskArg(v);
+      env[k] = credentialEnvName(k) ? REDACTED : maskArg(local(v));
     }
-    rec = { transport: 'stdio', command: maskArg(target.command), args: maskedArgs(target.args), env, telemetryEnv: { ...telemetryApplied } };
+    rec = { transport: 'stdio', command: maskArg(local(target.command)), args: maskedArgs(target.args.map(local)), env, telemetryEnv: { ...telemetryApplied } };
   }
   // defence in depth: whatever the masking rules missed, the target's known credentials do not reach the file
-  return scrubDeep(rec, secretVariants(targetSecrets(target)));
+  const scrubbed = scrubDeep(rec, secretVariants(targetSecrets(target)));
+  return rec.transport === 'stdio' ? redactLocalPathsDeep(scrubbed, pathRoot) : scrubbed;
 }
