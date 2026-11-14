@@ -14,8 +14,8 @@ uses semantic versioning once past 0.x.
   publishes that tarball with npm trusted publishing (OIDC, no npm token
   anywhere) and `--provenance`, and checks the registry serves the same
   integrity with a provenance attestation. Only the publish job has
-  `id-token: write`, and it installs no dependencies. A manual run is a dry
-  run and cannot publish.
+  `id-token: write`; it installs no project dependencies. A tag whose commit is
+  not on `main` is refused. A manual run is a dry run and cannot publish.
 - **`scripts/release-check.mjs`** (not shipped) and **`RELEASING.md`**: the
   tag, npm/Node, pack and registry checks; the one-time owner setup and the
   release steps.
@@ -25,7 +25,7 @@ uses semantic versioning once past 0.x.
 - package.json `repository` and `bugs` name
   `github.com/isokron-ai/mcp-catalog-snap`, where the repository now lives
   (npm refuses a provenance statement whose repository differs); `homepage`
-  points to isokron.ai/open-source. The README's Action example uses
+  points to isokron.ai/open-source/mcp-catalog-snap. The README's Action example uses
   `isokron-ai/mcp-catalog-snap@v0.3.0`.
 
 ### Fixed

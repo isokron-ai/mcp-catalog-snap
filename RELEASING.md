@@ -27,6 +27,10 @@ them. Do them in this order.
    | Repository | `mcp-catalog-snap` |
    | Workflow filename | `release.yml` |
    | Environment name | `npm-publish` |
+   | Allowed actions | tick **`npm publish`** (direct publish); leave "Allow npm dist-tag" off |
+
+   Trusted publishers created after 3 Sep 2026 allow only `npm stage publish` unless direct
+   `npm publish` is ticked, and this workflow publishes directly.
 
    All fields are case-sensitive, and npm checks them only at publish time. **A new trusted
    publisher expires if it has not published within 2 days**, so add it when the first release
@@ -51,15 +55,16 @@ publishes; only a pushed `vX.Y.Z` tag does.
    git push origin vX.Y.Z
    ```
 3. The workflow runs:
-   - `verify` (no token): the tag names package.json's version, the CHANGELOG entry is dated,
+   - `verify` (no token): the tag names package.json's version and its commit is on `main`, the
+     CHANGELOG entry is dated,
      package.json's `repository.url` names this repository; then lint, typecheck and the test suite; then `npm pack`
      of the tested build, its sha512 integrity, `npm publish --dry-run`, and the tarball handed
      on as an artifact. Dependency install scripts run only in this job;
    - `publish` (waits for the `npm-publish` approval; holds the OIDC token): npm 11.5.1+ on
      Node 22.14.0+, the tag check again, a check that the downloaded tarball has the integrity
-     `verify` recorded, `npm publish <tarball> --provenance --ignore-scripts`, then a check that
+     `verify` recorded, `npm publish <tarball> --provenance --access public --ignore-scripts`, then a check that
      the registry serves the same integrity with a provenance attestation. It installs no
-     dependencies.
+     project dependencies.
 4. Approve the `npm-publish` deployment when `verify` is green.
 
 ## After a release
@@ -75,10 +80,16 @@ and the commit.
 
 - `E404` / `E403` / `ENEEDAUTH` ("Unable to authenticate") on publish: the trusted publisher on
   npmjs.com does not match this workflow (organization, repository, workflow filename and
-  environment must all match exactly), or it expired before its first publish.
+  environment must all match exactly), "Allowed actions" does not include direct `npm publish`,
+  or the trusted publisher expired before its first publish.
+- The registry check fails after the publish step succeeded: the registry was slow. Check by
+  hand with `npm view mcp-catalog-snap@X.Y.Z dist.integrity dist.attestations`; do not re-run the publish
+  (a version cannot be published twice).
 - `E422 … repository.url`: package.json `repository.url` does not name
   `github.com/isokron-ai/mcp-catalog-snap`.
 - `npm 10.x cannot publish with trusted publishing`: the npm upgrade step did not run.
+
+The workflow also refuses a tag whose commit is not on `main`.
 
 Do not add an `NPM_TOKEN` secret to make a failing publish pass: a token bypasses trusted
 publishing and drops the provenance guarantee.
