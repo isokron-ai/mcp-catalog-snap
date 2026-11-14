@@ -6,6 +6,28 @@ uses semantic versioning once past 0.x.
 
 ## [Unreleased]
 
+### Added — releases by trusted publishing with provenance
+
+- **`.github/workflows/release.yml`.** A pushed `vX.Y.Z` tag runs the CI
+  gates on the tagged commit (lint, typecheck, tests) and packs the tested
+  build in a job with no token; then, from the `npm-publish` environment,
+  publishes that tarball with npm trusted publishing (OIDC, no npm token
+  anywhere) and `--provenance`, and checks the registry serves the same
+  integrity with a provenance attestation. Only the publish job has
+  `id-token: write`; it installs no project dependencies. A tag whose commit is
+  not on `main` is refused. A manual run is a dry run and cannot publish.
+- **`scripts/release-check.mjs`** (not shipped) and **`RELEASING.md`**: the
+  tag, npm/Node, pack and registry checks; the one-time owner setup and the
+  release steps.
+
+### Changed
+
+- package.json `repository` and `bugs` name
+  `github.com/isokron-ai/mcp-catalog-snap`, where the repository now lives
+  (npm refuses a provenance statement whose repository differs); `homepage`
+  points to isokron.ai/open-source/mcp-catalog-snap. The README's Action example uses
+  `isokron-ai/mcp-catalog-snap@v0.3.0`.
+
 ### Fixed
 
 - **Local paths no longer leak into snapshot and matrix files.** The

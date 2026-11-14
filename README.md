@@ -599,7 +599,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rafe-walker/mcp-catalog-snap@v0.3.0
+      - uses: isokron-ai/mcp-catalog-snap@v0.3.0
         with:
           servers-config: .mcp-catalog.json   # default
           # ignore-descriptions: 'true'
@@ -737,4 +737,4 @@ lockfile (a stale tree once broke the type build and the CLI).
 
 ---
 
-Built and maintained by [IsoKron](https://isokron.ai).
+Built and maintained by [IsoKron](https://isokron.ai/?utm_source=npm&utm_medium=readme&utm_campaign=mcp-catalog-snap), which tests MCP servers for write safety.
