@@ -3,7 +3,7 @@
  *
  * Live: capture over stdio or Streamable HTTP. Offline: a saved file holding
  * any of
- *   - an mcp-catalog-snap snapshot (`"format": "mcp-catalog-snap/1"`),
+ *   - an mcp-catalog-snap snapshot (`"format": "mcp-catalog-snap/2"` or `/1`),
  *     integrity-checked like `check` does;
  *   - a `tools/list` result `{ "tools": [...] }` (optionally with `prompts`,
  *     `resourceTemplates`, `serverInfo`);
@@ -16,7 +16,7 @@ import { basename, extname } from 'node:path';
 import { capture, type CaptureOptions, type Target } from '../capture.js';
 import { fingerprint } from '../canonical.js';
 import { safeUrl } from '../redact.js';
-import { SNAPSHOT_FORMAT, SnapshotIntegrityError, normalizeCatalog, parseSnapshot } from '../snapshot.js';
+import { SnapshotIntegrityError, isSnapshotFormat, normalizeCatalog, parseSnapshot } from '../snapshot.js';
 import type { SourceInfo, SweepInput } from './types.js';
 
 export const TOOLS_LIST_ADAPTER = 'tools-list';
@@ -59,7 +59,7 @@ export function parseToolsListFile(text: string, fileName: string, nameOverride?
   const stem = basename(fileName, extname(fileName)) || 'server';
   const obj = asObject(parsed);
 
-  if (obj && obj['format'] === SNAPSHOT_FORMAT) {
+  if (obj && isSnapshotFormat(obj['format'])) {
     const snap = parseSnapshot(text, fileName);
     const body = fingerprint(snap.catalog);
     if (body !== snap.sha256) throw new SnapshotIntegrityError(fileName, snap.sha256, body);
@@ -69,6 +69,7 @@ export function parseToolsListFile(text: string, fileName: string, nameOverride?
       adapter: TOOLS_LIST_ADAPTER,
       server,
       protocolVersion: snap.protocolVersion,
+      handshake: snap.handshake ?? null,
       source: { kind: 'file', name: basename(fileName), format: 'snapshot' },
       catalog: snap.catalog,
       orderedTools: null,
@@ -122,6 +123,7 @@ export async function sweepInputFromServer(target: Target, opts: CaptureOptions 
     adapter: TOOLS_LIST_ADAPTER,
     server,
     protocolVersion: raw.protocolVersion,
+    handshake: raw.handshake ?? null,
     source: sourceOf(target),
     catalog: normalizeCatalog(raw),
     orderedTools: raw.tools,

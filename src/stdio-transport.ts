@@ -12,6 +12,12 @@
  * forwarded through a pipe for the same reason, not inherited). The same group kill
  * runs if this process exits or is interrupted with a server still running.
  * On Windows the tree is ended with `taskkill /T /F`.
+ *
+ * The child's stderr is always read through a pipe: forwarded to this
+ * process's stderr for 'inherit', drained otherwise, and its last lines are
+ * kept (`exitInfo`). A server that refuses its flags or configuration
+ * usually says why on stderr and exits; the SDK only reports "Connection
+ * closed", so the capture error quotes the server's own last lines.
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -67,6 +73,17 @@ function hookExit(): void {
   }
 }
 
+/** Lines of the child's stderr kept for error messages (the last ones), and their caps. */
+const STDERR_TAIL_LINES = 8;
+const STDERR_LINE_CHARS = 400;
+
+export interface ExitInfo {
+  code: number | null;
+  signal: string | null;
+  /** The last lines the server wrote to stderr (trimmed, at most 8). */
+  stderrTail: string[];
+}
+
 export class GroupStdioTransport implements Transport {
   onclose?: () => void;
   onerror?: (error: Error) => void;
@@ -75,6 +92,24 @@ export class GroupStdioTransport implements Transport {
   private child: ChildProcess | undefined;
   private readonly buffer: ReadBuffer;
   private closing: Promise<void> | undefined;
+  private tail: string[] = [];
+  private partial = '';
+  private exit: { code: number | null; signal: string | null } | null = null;
+  private stopping = false;
+
+  /** How the server ended, when it ended on its own (not by close()), with its last stderr lines; null while it runs. */
+  exitInfo(): ExitInfo | null {
+    if (!this.exit || this.stopping) return null;
+    const tail = [...this.tail, ...(this.partial.trim() ? [this.partial.trim().slice(0, STDERR_LINE_CHARS)] : [])].slice(-STDERR_TAIL_LINES);
+    return { code: this.exit.code, signal: this.exit.signal, stderrTail: tail };
+  }
+
+  private keepStderr(chunk: Buffer): void {
+    const lines = (this.partial + chunk.toString('utf8')).split(/\r?\n/);
+    this.partial = (lines.pop() ?? '').slice(-STDERR_LINE_CHARS * 4);
+    for (const l of lines) if (l.trim()) this.tail.push(l.trim().slice(0, STDERR_LINE_CHARS));
+    if (this.tail.length > STDERR_TAIL_LINES) this.tail.splice(0, this.tail.length - STDERR_TAIL_LINES);
+  }
 
   constructor(private readonly params: GroupStdioParams) {
     this.buffer = new ReadBuffer({ maxBufferSize: params.maxBufferSize });
@@ -91,8 +126,9 @@ export class GroupStdioTransport implements Transport {
       const child = spawn(this.params.command, this.params.args, {
         env: this.params.env,
         cwd: this.params.cwd,
-        // 'inherit' is forwarded through a pipe we own: an inherited fd would let a survivor hold this process's stderr open
-        stdio: ['pipe', 'pipe', this.params.stderr === 'ignore' ? 'ignore' : 'pipe'],
+        // stderr is always a pipe we own: forwarded for 'inherit' (an inherited fd would let a survivor hold this
+        // process's stderr open), drained otherwise, and its last lines kept for the error a failed capture reports
+        stdio: ['pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
         shell: false,
         windowsHide: true,
@@ -105,13 +141,18 @@ export class GroupStdioTransport implements Transport {
         this.onerror?.(err);
       });
       child.on('spawn', () => resolve());
+      child.on('exit', (code, signal) => {
+        this.exit = { code, signal };
+      });
       child.on('close', () => {
         live.delete(child);
         if (this.child === child) this.child = undefined;
         this.onclose?.();
       });
-      if (this.params.stderr === 'inherit') child.stderr?.pipe(process.stderr, { end: false });
-      else child.stderr?.resume(); // 'pipe' with no reader: drain so the server never blocks on a full pipe
+      child.stderr?.on('data', (chunk: Buffer) => {
+        this.keepStderr(chunk);
+        if (this.params.stderr === 'inherit') process.stderr.write(chunk);
+      });
       child.stdin?.on('error', (err) => this.onerror?.(err));
       child.stdout?.on('error', (err) => this.onerror?.(err));
       child.stdout?.on('data', (chunk: Buffer) => {
@@ -157,6 +198,8 @@ export class GroupStdioTransport implements Transport {
   private async shutdown(): Promise<void> {
     const child = this.child;
     if (!child) return;
+    // an exit from here on is ours (stdin closed, then signals), not the server giving up
+    if (!this.exit) this.stopping = true;
     const grace = this.params.graceMs ?? 2000;
     const exited = new Promise<void>((r) => {
       if (child.exitCode !== null || child.signalCode !== null) r();

@@ -175,7 +175,8 @@ const KEY_OF: Record<Section, string> = {
   resourceTemplates: 'uriTemplate',
 };
 
-function indexSection(catalog: Catalog, section: Section): Map<string, JsonValue> {
+/** Entries of one section keyed by name (tools, prompts) or uriTemplate (resource templates). */
+export function indexSection(catalog: Catalog, section: Section): Map<string, JsonValue> {
   const m = new Map<string, JsonValue>();
   const key = KEY_OF[section];
   for (const entry of catalog[section] as unknown as Array<Record<string, JsonValue>>) {

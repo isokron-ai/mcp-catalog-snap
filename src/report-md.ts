@@ -65,7 +65,10 @@ export function renderSweepMarkdown(r: SweepReport, opts: MarkdownOptions = {}):
   row(['---', '---']);
   const src = r.source.kind === 'file' ? `file ${mdCode(r.source.name)} (${mdText(r.source.format)})` : r.source.kind === 'http' ? mdCode(r.source.url, 120) : `stdio ${mdCode(r.source.command)}`;
   row(['source', `${src}, adapter \`${r.adapter}\``]);
-  row(['protocol', r.protocolVersion ? mdText(r.protocolVersion) : 'unknown']);
+  const hs = r.handshake;
+  const requested = hs?.requestedProtocolVersion;
+  row(['protocol', `${r.protocolVersion ? mdText(r.protocolVersion) : 'unknown'}${requested ? ` (requested ${mdText(requested)})` : ''}`]);
+  if (hs) row(['client capabilities', mdCode(JSON.stringify(hs.clientCapabilities), 200)]);
   row(['catalog fingerprint', `\`${r.fingerprints.catalog}\``]);
   row(['tools-ordered fingerprint (ADR-0005)', r.fingerprints.toolsOrdered ? `\`${r.fingerprints.toolsOrdered}\`` : 'n/a']);
   row(['model-visible measured as', mdText(r.measurement.modelVisible, 200)]);

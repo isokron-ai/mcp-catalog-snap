@@ -18,6 +18,7 @@ export {
   openSession,
   openSessionOnTransport,
   type CaptureOptions,
+  type Handshake,
   type Session,
   type HttpTarget,
   type StdioTarget,
@@ -48,8 +49,36 @@ export {
 } from './diff.js';
 export { renderDiff, renderSnapshotHeader, type CheckReport, type RenderOptions, type ServerResult } from './render.js';
 export {
+  TELEMETRY_OFF_ENV,
+  childEnv,
+  describeLaunch,
+  telemetryEnv,
+  type HttpLaunch,
+  type LaunchRecord,
+  type StdioLaunch,
+  type TelemetryOptions,
+} from './launch.js';
+export {
+  MATRIX_FORMAT,
+  MATRIX_REPORT_FILE,
+  applyFlagSet,
+  buildMatrix,
+  parseFlagSets,
+  renderMatrix,
+  type FlagSet,
+  type MatrixCapture,
+  type MatrixEntry,
+  type MatrixReport,
+  type MatrixSetResult,
+  type MatrixVariant,
+  type MatrixVersusBaseline,
+} from './matrix.js';
+export {
   SNAPSHOT_FORMAT,
+  SNAPSHOT_FORMATS,
+  SNAPSHOT_FORMAT_V1,
   buildSnapshot,
+  isSnapshotFormat,
   normalizeCatalog,
   parseSnapshot,
   safeFileName,
@@ -63,6 +92,7 @@ export {
   type RawCapture,
   type ServerInfo,
   type Snapshot,
+  type SnapshotFormat,
 } from './snapshot.js';
 export {
   EXIT_DRIFT,
@@ -73,11 +103,13 @@ export {
   cmdCheck,
   cmdDiff,
   cmdHash,
+  cmdMatrix,
   cmdSnapshot,
   type CheckOptions,
   type DiffOptions,
   type HashOptions,
   type IO,
+  type MatrixOptions,
   type SnapshotOptions,
 } from './commands.js';
 export {

@@ -11,6 +11,7 @@
  * adapter (metrics, findings, report) is the same for both.
  */
 
+import type { Handshake } from '../capture.js';
 import type { Finding } from '../findings.js';
 import type { Catalog, CatalogTool } from '../snapshot.js';
 
@@ -24,6 +25,8 @@ export interface SweepInput {
   adapter: string;
   server: { name: string; version: string | null; title?: string };
   protocolVersion: string | null;
+  /** The initialize handshake (requested / negotiated version, client capabilities), when known: live captures and format-2 snapshots. */
+  handshake?: Handshake | null;
   source: SourceInfo;
   /** Normalized contracts (tools sorted by name), hashed like a snapshot catalog. */
   catalog: Catalog;

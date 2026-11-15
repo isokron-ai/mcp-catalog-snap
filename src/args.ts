@@ -5,6 +5,7 @@
  */
 
 import type { Target } from './capture.js';
+import type { TelemetryOptions } from './launch.js';
 import { readInputText } from './read-input.js';
 import { assertCredentialLengths } from './redact.js';
 
@@ -19,7 +20,7 @@ export interface ParsedArgs {
   repeated: string[];
 }
 
-export const REPEATABLE: ReadonlySet<string> = new Set(['header', 'env']);
+export const REPEATABLE: ReadonlySet<string> = new Set(['header', 'env', 'telemetry-env']);
 export const BOOLEAN: ReadonlySet<string> = new Set([
   'json',
   'ignore-descriptions',
@@ -32,6 +33,7 @@ export const BOOLEAN: ReadonlySet<string> = new Set([
   'anthropic',
   'count-annotations',
   'allow-write-additions',
+  'no-telemetry-defaults',
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -123,6 +125,21 @@ export function bearerToken(args: ParsedArgs, env: NodeJS.ProcessEnv = process.e
     if (!token) throw new Error(`--bearer-env ${envName}: variable is unset or empty`);
   }
   return token;
+}
+
+/** `--telemetry-env KEY=value` (repeatable) and `--no-telemetry-defaults`, or undefined when neither is given. */
+export function telemetryFromArgs(args: ParsedArgs): TelemetryOptions | undefined {
+  const extra: Record<string, string> = {};
+  for (const e of args.multi['telemetry-env'] ?? []) {
+    const idx = e.indexOf('=');
+    if (idx <= 0) throw new Error('--telemetry-env expects "KEY=value"');
+    extra[e.slice(0, idx)] = e.slice(idx + 1);
+  }
+  const off = bool(args.flags['no-telemetry-defaults']);
+  if (!off && Object.keys(extra).length === 0) return undefined;
+  const t: TelemetryOptions = { extra };
+  if (off) t.defaults = false;
+  return t;
 }
 
 /** Build an ad-hoc target from `--url ...` or `-- cmd args`, or undefined. */
